@@ -30,15 +30,6 @@ downloaded books and local CBZ files available offline.
 Nineveh Reader accepts HTTP only for loopback hosts such as
 `127.0.0.1`. All remote servers must use HTTPS.
 
-## Preview
-
-![Nineveh Reader home](docs/images/library-home.png)
-
-The Browse screen switches between one all-content view and collections grouped
-by category, series, or author.
-
-![Nineveh Reader organized browsing](docs/images/library-browse.png)
-
 ## Quick start
 
 1. Start Nineveh and verify that `http://127.0.0.1:8081` is reachable.
