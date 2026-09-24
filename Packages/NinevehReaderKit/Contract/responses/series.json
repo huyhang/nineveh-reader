@@ -1,0 +1,11 @@
+{
+  "id": "b32d1cc5-f661-4325-b3e8-dbef68cdfb32",
+  "libraryId": "df661865-5c9a-415d-8329-9ffff9153625",
+  "library": "Sample Library",
+  "category": "comics",
+  "localName": "Nineveh Adventures",
+  "title": "Nineveh Adventures",
+  "publicationCount": 2,
+  "cover": "/api/v1/series/b32d1cc5-f661-4325-b3e8-dbef68cdfb32/cover",
+  "metadata": null
+}

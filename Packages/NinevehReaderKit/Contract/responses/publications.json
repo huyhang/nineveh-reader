@@ -1,0 +1,133 @@
+{
+  "metadata": {
+    "title": "Nineveh — Sample Library — comics",
+    "modified": "2026-09-24T02:26:56.736088+00:00",
+    "numberOfItems": 2,
+    "itemsPerPage": 24,
+    "currentPage": 1
+  },
+  "links": [
+    {
+      "rel": "self",
+      "href": "http://127.0.0.1:8081/opds/v2/publications.json?library=Sample+Library&category=comics&page=1",
+      "type": "application/opds+json"
+    },
+    {
+      "rel": "start",
+      "href": "http://127.0.0.1:8081/opds/v2/catalog.json",
+      "type": "application/opds+json"
+    }
+  ],
+  "publications": [
+    {
+      "metadata": {
+        "@type": "http://schema.org/ComicStory",
+        "identifier": "urn:uuid:e90f9e8e-82be-4f12-831e-c02944fef9b9",
+        "title": "The Gates of Nineveh",
+        "modified": "2026-09-23T19:55:54.517995+00:00",
+        "numberOfPages": 3,
+        "belongsTo": {
+          "series": [
+            {
+              "name": "Nineveh Adventures",
+              "identifier": "urn:uuid:b32d1cc5-f661-4325-b3e8-dbef68cdfb32",
+              "position": 1
+            }
+          ]
+        },
+        "description": "A courier discovers a hidden passage beneath the ancient city.",
+        "author": [
+          {
+            "name": "Nineveh Sample Author"
+          }
+        ]
+      },
+      "links": [
+        {
+          "rel": "http://opds-spec.org/acquisition",
+          "href": "http://127.0.0.1:8081/api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/file",
+          "type": "application/vnd.comicbook+zip",
+          "title": "Download CBZ",
+          "properties": {
+            "length": 1503
+          }
+        },
+        {
+          "rel": "urn:nineveh:rel:page-manifest",
+          "href": "http://127.0.0.1:8081/api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/pages",
+          "type": "application/json",
+          "title": "Page manifest"
+        },
+        {
+          "rel": "urn:nineveh:rel:page-range",
+          "href": "http://127.0.0.1:8081/api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/range{?start,end}",
+          "type": "application/vnd.comicbook+zip",
+          "title": "Download a page range as a CBZ",
+          "templated": true
+        }
+      ],
+      "images": [
+        {
+          "href": "http://127.0.0.1:8081/api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/cover?width=640&revision=b755bd2e28f9c3c34a148b8d",
+          "type": "image/webp",
+          "width": 640
+        }
+      ]
+    },
+    {
+      "metadata": {
+        "@type": "http://schema.org/ComicStory",
+        "identifier": "urn:uuid:8300eb1a-a2eb-47bc-9015-0d4660cac6d6",
+        "title": "The Lion's Road",
+        "modified": "2026-09-23T19:55:54.535512+00:00",
+        "numberOfPages": 3,
+        "belongsTo": {
+          "series": [
+            {
+              "name": "Nineveh Adventures",
+              "identifier": "urn:uuid:b32d1cc5-f661-4325-b3e8-dbef68cdfb32",
+              "position": 2
+            }
+          ]
+        },
+        "description": "The journey continues beyond the walls and into the eastern hills.",
+        "author": [
+          {
+            "name": "Nineveh Sample Author"
+          }
+        ]
+      },
+      "links": [
+        {
+          "rel": "http://opds-spec.org/acquisition",
+          "href": "http://127.0.0.1:8081/api/v1/publications/8300eb1a-a2eb-47bc-9015-0d4660cac6d6/file",
+          "type": "application/vnd.comicbook+zip",
+          "title": "Download CBZ",
+          "properties": {
+            "length": 1504
+          }
+        },
+        {
+          "rel": "urn:nineveh:rel:page-manifest",
+          "href": "http://127.0.0.1:8081/api/v1/publications/8300eb1a-a2eb-47bc-9015-0d4660cac6d6/pages",
+          "type": "application/json",
+          "title": "Page manifest"
+        },
+        {
+          "rel": "urn:nineveh:rel:page-range",
+          "href": "http://127.0.0.1:8081/api/v1/publications/8300eb1a-a2eb-47bc-9015-0d4660cac6d6/range{?start,end}",
+          "type": "application/vnd.comicbook+zip",
+          "title": "Download a page range as a CBZ",
+          "templated": true
+        }
+      ],
+      "images": [
+        {
+          "href": "http://127.0.0.1:8081/api/v1/publications/8300eb1a-a2eb-47bc-9015-0d4660cac6d6/cover?width=640&revision=eaa5e73b25945f52f8ce3ecc",
+          "type": "image/webp",
+          "width": 640
+        }
+      ]
+    }
+  ]
+}

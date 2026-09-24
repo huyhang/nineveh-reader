@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "title": "Nineveh — Sample Library",
+    "modified": "2026-09-24T02:26:56.736088+00:00",
+    "numberOfItems": 1
+  },
+  "links": [
+    {
+      "rel": "self",
+      "href": "http://127.0.0.1:8081/opds/v2/navigation.json?library=Sample+Library",
+      "type": "application/opds+json"
+    },
+    {
+      "rel": "start",
+      "href": "http://127.0.0.1:8081/opds/v2/catalog.json",
+      "type": "application/opds+json"
+    }
+  ],
+  "navigation": [
+    {
+      "title": "comics",
+      "href": "http://127.0.0.1:8081/opds/v2/navigation.json?library=Sample+Library&category=comics",
+      "type": "application/opds+json",
+      "properties": {
+        "numberOfItems": 2
+      }
+    }
+  ]
+}

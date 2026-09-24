@@ -1,0 +1,21 @@
+{
+  "id": "http://127.0.0.1:8081/opds/v2/authentication.json",
+  "title": "Nineveh authentication",
+  "description": "Sign in with a Nineveh username and password.",
+  "authentication": [
+    {
+      "type": "http://opds-spec.org/auth/basic",
+      "labels": {
+        "login": "Username",
+        "password": "Password"
+      }
+    }
+  ],
+  "links": [
+    {
+      "rel": "logo",
+      "href": "http://127.0.0.1:8081/static/icon.svg",
+      "type": "image/svg+xml"
+    }
+  ]
+}

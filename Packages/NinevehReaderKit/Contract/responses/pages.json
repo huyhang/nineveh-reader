@@ -1,0 +1,36 @@
+{
+  "publicationId": "e90f9e8e-82be-4f12-831e-c02944fef9b9",
+  "revision": "b755bd2e28f9c3c34a148b8d",
+  "totalPages": 3,
+  "start": 1,
+  "end": 3,
+  "pages": [
+    {
+      "number": 1,
+      "href": "http://127.0.0.1:8081/api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/pages/1?revision=b755bd2e28f9c3c34a148b8d",
+      "type": "image/png",
+      "length": 2823,
+      "width": 600,
+      "height": 900,
+      "spread": false
+    },
+    {
+      "number": 2,
+      "href": "http://127.0.0.1:8081/api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/pages/2?revision=b755bd2e28f9c3c34a148b8d",
+      "type": "image/png",
+      "length": 2822,
+      "width": 600,
+      "height": 900,
+      "spread": false
+    },
+    {
+      "number": 3,
+      "href": "http://127.0.0.1:8081/api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/pages/3?revision=b755bd2e28f9c3c34a148b8d",
+      "type": "image/png",
+      "length": 2822,
+      "width": 600,
+      "height": 900,
+      "spread": false
+    }
+  ]
+}

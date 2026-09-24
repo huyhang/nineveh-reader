@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS app
+        run: >-
+          xcodebuild
+          -project NinevehReader.xcodeproj
+          -scheme NinevehReader
+          -destination 'platform=macOS'
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Run shared unit tests
+        working-directory: Packages/NinevehReaderKit
+        run: swift test

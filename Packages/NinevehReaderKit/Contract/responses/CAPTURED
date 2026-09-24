@@ -1,0 +1,12 @@
+server:   http://127.0.0.1:8081
+version:  0.1.0
+taken:    2026-09-24T02:33:15Z
+
+authentication.json  GET /opds/v2/authentication.json
+me.json              GET /api/v1/auth/me
+catalog.json         GET /opds/v2/catalog.json
+navigation.json      GET /opds/v2/navigation.json?library=Sample Library
+publications.json    GET /opds/v2/publications.json?library=Sample Library&category=comics
+series.json          GET /api/v1/series/b32d1cc5-f661-4325-b3e8-dbef68cdfb32
+pages.json           GET /api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/pages
+progress.json        GET /api/v1/publications/e90f9e8e-82be-4f12-831e-c02944fef9b9/progress

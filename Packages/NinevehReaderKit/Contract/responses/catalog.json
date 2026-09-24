@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "title": "Nineveh",
+    "modified": "2026-09-24T02:26:56.736088+00:00",
+    "numberOfItems": 2
+  },
+  "links": [
+    {
+      "rel": "self",
+      "href": "http://127.0.0.1:8081/opds/v2/catalog.json",
+      "type": "application/opds+json"
+    },
+    {
+      "rel": "http://opds-spec.org/auth/document",
+      "href": "http://127.0.0.1:8081/opds/v2/authentication.json",
+      "type": "application/opds-authentication+json"
+    },
+    {
+      "rel": "search",
+      "href": "http://127.0.0.1:8081/opds/v2/publications.json?q={searchTerms}",
+      "type": "application/opds+json",
+      "templated": true
+    }
+  ],
+  "navigation": [
+    {
+      "title": "Sample Library",
+      "href": "http://127.0.0.1:8081/opds/v2/navigation.json?library=Sample+Library",
+      "type": "application/opds+json",
+      "properties": {
+        "numberOfItems": 2
+      }
+    },
+    {
+      "title": "Test Library",
+      "href": "http://127.0.0.1:8081/opds/v2/navigation.json?library=Test+Library",
+      "type": "application/opds+json",
+      "properties": {
+        "numberOfItems": 4
+      }
+    }
+  ]
+}
