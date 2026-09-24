@@ -14,13 +14,26 @@ struct NinevehReaderApp: App {
     WindowGroup {
       NinevehReaderRootView(model: model)
         .onOpenURL { url in
-          Task { await model.addLocalFiles([url], kind: .external) }
+          #if os(macOS)
+            Task { await model.addLocalFiles([url], kind: .external) }
+          #else
+            // A book shared from another app arrives as a copy in the inbox,
+            // which the library imports rather than leaving where it landed.
+            Task {
+              await model.addLocalFiles([url], kind: .imported)
+              if url.path(percentEncoded: false).contains("/Documents/Inbox/") {
+                try? FileManager.default.removeItem(at: url)
+              }
+            }
+          #endif
         }
     }
-    // The library's top bar is the toolbar, with the window's buttons in it.
-    .windowToolbarStyle(.unified(showsTitle: false))
-    .defaultSize(width: 1180, height: 780)
-    .windowResizability(.contentMinSize)
+    #if os(macOS)
+      // The library's top bar is the toolbar, with the window's buttons in it.
+      .windowToolbarStyle(.unified(showsTitle: false))
+      .defaultSize(width: 1180, height: 780)
+      .windowResizability(.contentMinSize)
+    #endif
     .commands {
       LibraryCommands(model: model)
     }

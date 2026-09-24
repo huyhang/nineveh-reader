@@ -97,7 +97,7 @@ public struct ReaderContext: Sendable {
 }
 
 public enum ProgressSaveResult: Equatable, Sendable {
-  /// Saved on the server, or, for a file on this Mac, saved where it lives.
+  /// Saved on the server, or, for a file on this device, saved where it lives.
   case saved
   /// Kept on this device; `retryable` when the server might take it later.
   case savedLocally(retryable: Bool)

@@ -17,6 +17,14 @@ jobs:
           -destination 'platform=macOS'
           CODE_SIGNING_ALLOWED=NO
           build
+      - name: Build iPad app
+        run: >-
+          xcodebuild
+          -project NinevehReader.xcodeproj
+          -scheme 'NinevehReader iPad'
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build
       - name: Run shared unit tests
         working-directory: Packages/NinevehReaderKit
         run: swift test

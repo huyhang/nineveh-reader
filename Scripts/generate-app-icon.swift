@@ -5,12 +5,20 @@ import Foundation
 
 private let canvasSize: CGFloat = 1024
 
+private enum IconStyle {
+  /// A rounded tile with its own shadow, inset on a transparent canvas.
+  case mac
+  /// The tile's face filling an opaque square, which iPadOS rounds itself.
+  case iOS
+}
+
 private struct IconAsset {
   let filename: String
   let pixels: Int
+  var style = IconStyle.mac
 }
 
-private let assets = [
+private let macAssets = [
   IconAsset(filename: "AppIcon-16.png", pixels: 16),
   IconAsset(filename: "AppIcon-16@2x.png", pixels: 32),
   IconAsset(filename: "AppIcon-32.png", pixels: 32),
@@ -21,6 +29,10 @@ private let assets = [
   IconAsset(filename: "AppIcon-256@2x.png", pixels: 512),
   IconAsset(filename: "AppIcon-512.png", pixels: 512),
   IconAsset(filename: "AppIcon-512@2x.png", pixels: 1024),
+]
+
+private let iOSAssets = [
+  IconAsset(filename: "AppIcon-1024.png", pixels: 1024, style: .iOS)
 ]
 
 private func color(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 1)
@@ -69,21 +81,26 @@ private func fill(
   context.restoreGState()
 }
 
-private func drawIcon(in context: CGContext) {
+private func drawIcon(in context: CGContext, style: IconStyle) {
   // Apple's macOS icon grid: an 824-point tile centred on the 1024 canvas.
-  let tile = CGPath(
-    roundedRect: CGRect(x: 100, y: 100, width: 824, height: 824),
-    cornerWidth: 186,
-    cornerHeight: 186,
-    transform: nil
-  )
-
-  context.saveGState()
-  context.setShadow(offset: CGSize(width: 0, height: -12), blur: 24, color: color(0, 0, 0, 0.45))
-  context.addPath(tile)
-  context.setFillColor(color(0.04, 0.04, 0.04))
-  context.fillPath()
-  context.restoreGState()
+  let tileRect = CGRect(x: 100, y: 100, width: 824, height: 824)
+  let tile: CGPath
+  switch style {
+  case .mac:
+    tile = CGPath(roundedRect: tileRect, cornerWidth: 186, cornerHeight: 186, transform: nil)
+    context.saveGState()
+    context.setShadow(
+      offset: CGSize(width: 0, height: -12), blur: 24, color: color(0, 0, 0, 0.45))
+    context.addPath(tile)
+    context.setFillColor(color(0.04, 0.04, 0.04))
+    context.fillPath()
+    context.restoreGState()
+  case .iOS:
+    // The same tile, grown until its face fills the canvas edge to edge.
+    context.scaleBy(x: canvasSize / tileRect.width, y: canvasSize / tileRect.height)
+    context.translateBy(x: -tileRect.minX, y: -tileRect.minY)
+    tile = CGPath(rect: tileRect, transform: nil)
+  }
 
   context.saveGState()
   context.addPath(tile)
@@ -105,10 +122,12 @@ private func drawIcon(in context: CGContext) {
   )
   context.restoreGState()
 
-  context.addPath(tile)
-  context.setStrokeColor(color(1, 1, 1, 0.07))
-  context.setLineWidth(4)
-  context.strokePath()
+  if style == .mac {
+    context.addPath(tile)
+    context.setStrokeColor(color(1, 1, 1, 0.07))
+    context.setLineWidth(4)
+    context.strokePath()
+  }
 
   // "Ni", centred on the tile. A geometric N: two stems, with the diagonal
   // laid over them like a folded ribbon.
@@ -162,25 +181,27 @@ private func drawIcon(in context: CGContext) {
     start: CGPoint(x: dot.minX, y: dot.maxY), end: CGPoint(x: dot.maxX, y: dot.minY))
 }
 
-private func renderIcon(pixels: Int, destination: URL) throws {
+private func renderIcon(_ asset: IconAsset, destination: URL) throws {
   let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+  // The App Store turns away iOS icons with an alpha channel.
+  let alpha: CGImageAlphaInfo = asset.style == .iOS ? .noneSkipLast : .premultipliedLast
   guard
     let context = CGContext(
       data: nil,
-      width: pixels,
-      height: pixels,
+      width: asset.pixels,
+      height: asset.pixels,
       bitsPerComponent: 8,
-      bytesPerRow: pixels * 4,
+      bytesPerRow: asset.pixels * 4,
       space: colorSpace,
-      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+      bitmapInfo: alpha.rawValue
     )
   else {
     throw CocoaError(.fileWriteUnknown)
   }
 
-  let scale = CGFloat(pixels) / canvasSize
+  let scale = CGFloat(asset.pixels) / canvasSize
   context.scaleBy(x: scale, y: scale)
-  drawIcon(in: context)
+  drawIcon(in: context, style: asset.style)
 
   guard let image = context.makeImage() else {
     throw CocoaError(.fileWriteUnknown)
@@ -194,15 +215,15 @@ private func renderIcon(pixels: Int, destination: URL) throws {
 
 let scriptURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
 let repositoryRoot = scriptURL.deletingLastPathComponent().deletingLastPathComponent()
-let outputDirectory =
-  repositoryRoot
-  .appendingPathComponent("App/Assets.xcassets/AppIcon.appiconset", isDirectory: true)
+private let outputs = [
+  ("App/Assets.xcassets/AppIcon.appiconset", macAssets),
+  ("App/iOS/Assets.xcassets/AppIcon.appiconset", iOSAssets),
+]
 
-for asset in assets {
-  try renderIcon(
-    pixels: asset.pixels,
-    destination: outputDirectory.appendingPathComponent(asset.filename)
-  )
+for (path, assets) in outputs {
+  let outputDirectory = repositoryRoot.appendingPathComponent(path, isDirectory: true)
+  for asset in assets {
+    try renderIcon(asset, destination: outputDirectory.appendingPathComponent(asset.filename))
+  }
+  print("Generated \(assets.count) app icon assets in \(outputDirectory.path)")
 }
-
-print("Generated \(assets.count) app icon assets in \(outputDirectory.path)")

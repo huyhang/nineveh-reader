@@ -16,7 +16,9 @@ public struct NinevehReaderRootView: View {
         switch model.phase {
         case .restoring:
           ProgressView("Opening your library…")
-            .frame(minWidth: 720, minHeight: 520)
+            #if os(macOS)
+              .frame(minWidth: 720, minHeight: 520)
+            #endif
         case .signedOut:
           SignInView(model: model)
         case .ready:
@@ -57,7 +59,12 @@ public struct NinevehReaderRootView: View {
 
 private struct SignInView: View {
   @ObservedObject var model: ApplicationModel
-  @State private var server = "http://127.0.0.1:8081"
+  #if os(macOS)
+    @State private var server = "http://127.0.0.1:8081"
+  #else
+    // An iPad has no Nineveh of its own for localhost to reach.
+    @State private var server = ""
+  #endif
   @State private var username = ""
   @State private var password = ""
 
@@ -73,10 +80,19 @@ private struct SignInView: View {
         }
 
         VStack(spacing: 14) {
-          TextField("Server", text: $server)
-            .textContentType(.URL)
-          TextField("Username", text: $username)
-            .textContentType(.username)
+          Group {
+            TextField("Server", text: $server)
+              .textContentType(.URL)
+              #if os(iOS)
+                .keyboardType(.URL)
+              #endif
+            TextField("Username", text: $username)
+              .textContentType(.username)
+          }
+          #if os(iOS)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+          #endif
           SecureField("Password", text: $password)
             .textContentType(.password)
 
@@ -92,21 +108,28 @@ private struct SignInView: View {
           .buttonStyle(.accent)
           .disabled(model.isRefreshing || username.isEmpty || password.isEmpty)
 
-          Button("Browse On My Mac") {
+          Button("Browse \(LibrarySection.onDevice.title)") {
             model.continueOffline()
           }
           .buttonStyle(.plain)
           .foregroundStyle(.secondary)
         }
         .textFieldStyle(.roundedBorder)
-        .frame(width: 340)
+        #if os(macOS)
+          .frame(width: 340)
+        #else
+          .frame(maxWidth: 340)
+        #endif
 
         Text("Remote connections require HTTPS. Localhost HTTP is permitted.")
           .font(.caption)
           .foregroundStyle(.tertiary)
+          .multilineTextAlignment(.center)
       }
       .padding(48)
     }
-    .frame(minWidth: 720, minHeight: 520)
+    #if os(macOS)
+      .frame(minWidth: 720, minHeight: 520)
+    #endif
   }
 }

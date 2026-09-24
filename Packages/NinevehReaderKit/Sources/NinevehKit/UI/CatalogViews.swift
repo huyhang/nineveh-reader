@@ -5,6 +5,7 @@ import SwiftUI
 
 struct HomeView: View {
   @ObservedObject var model: ApplicationModel
+  @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
     let continueReading = model.continueReading
@@ -33,7 +34,7 @@ struct HomeView: View {
           SeriesShelf(model: model, title: shelf.title, detail: shelf.detail, series: shelf.series)
         }
       }
-      .padding(ReaderTheme.contentPadding)
+      .padding(contentPadding)
     }
     .overlay {
       if model.publications.isEmpty && !model.isRefreshing {
@@ -47,7 +48,8 @@ struct HomeView: View {
           ContentUnavailableView(
             "No Publications",
             systemImage: "books.vertical",
-            description: Text("Connect to Nineveh or open On My Mac to start reading.")
+            description: Text(
+              "Connect to Nineveh or open \(LibrarySection.onDevice.title) to start reading.")
           )
         }
       }
@@ -80,6 +82,7 @@ private struct FeatureBanner: View {
   private let publication: Publication?
   private let series: SeriesGroup?
   @State private var coverData: Data?
+  @Environment(\.isNarrow) private var isNarrow
 
   init(model: ApplicationModel, publication: Publication) {
     self.model = model
@@ -95,7 +98,7 @@ private struct FeatureBanner: View {
 
   var body: some View {
     let progress = publication.map(model.progress(for:))
-    HStack(alignment: .center, spacing: 22) {
+    HStack(alignment: .center, spacing: isNarrow ? 16 : 22) {
       cover
 
       VStack(alignment: .leading, spacing: 7) {
@@ -124,14 +127,14 @@ private struct FeatureBanner: View {
         if let progress, progress.isStarted, !progress.isCompleted {
           HStack(spacing: 10) {
             ReadingProgressBar(fraction: progress.fraction, track: .white.opacity(0.2))
-              .frame(width: 200)
+              .frame(width: isNarrow ? 90 : 200)
             Text("\(progress.label) · \(progress.percent)%")
               .font(.caption.monospacedDigit())
               .foregroundStyle(.white.opacity(0.7))
           }
         }
 
-        HStack(spacing: 8) {
+        ActionRow(spacing: 8) {
           if let publication {
             Button {
               Task { await model.beginReading(publication) }
@@ -176,7 +179,7 @@ private struct FeatureBanner: View {
       data: coverData, title: publication?.title ?? headline,
       category: series?.category ?? publication?.category ?? .unknown
     )
-    .frame(width: 118, height: 177)
+    .frame(width: isNarrow ? 80 : 118, height: isNarrow ? 120 : 177)
     if let publication {
       Button {
         Task { await model.beginReading(publication) }
@@ -298,6 +301,7 @@ private struct ShelfContainer<Content: View>: View {
   @State private var tallestCard: CGFloat = 0
   @State private var position = ScrollPosition(edge: .leading)
   @State private var scroll = ShelfScroll()
+  @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -356,14 +360,14 @@ private struct ShelfContainer<Content: View>: View {
 
   /// Moves a shelf's width less a card, so the last card seen stays in view.
   private func page(by direction: CGFloat) {
-    let step = max(scroll.visible - 2 * ReaderTheme.contentPadding - 150, 150)
+    let step = max(scroll.visible - 2 * contentPadding - 150, 150)
     let target = min(max(scroll.offset + direction * step, 0), scroll.maxOffset)
     withAnimation(.easeInOut(duration: 0.35)) {
       position.scrollTo(x: target - scrollInsetLeading)
     }
   }
 
-  private var scrollInsetLeading: CGFloat { ReaderTheme.contentPadding }
+  private var scrollInsetLeading: CGFloat { contentPadding }
 }
 
 /// How far a shelf is scrolled, measured from its first card.
@@ -418,6 +422,7 @@ struct BrowseView: View {
   @State private var arrangement: BrowseArrangement
   @State private var category: PublicationCategory?
   @State private var sort: SeriesSort = .title
+  @Environment(\.contentPadding) private var contentPadding
 
   init(model: ApplicationModel, library: String?, initialArrangement: BrowseArrangement = .series) {
     self.model = model
@@ -446,7 +451,7 @@ struct BrowseView: View {
               from: volumes, groupedBy: .author, creators: { model.creators(of: $0) }))
         }
       }
-      .padding(ReaderTheme.contentPadding)
+      .padding(contentPadding)
     }
     .overlay {
       if series.isEmpty && !model.isRefreshing {
@@ -469,43 +474,72 @@ struct BrowseView: View {
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(ReaderTheme.secondaryText)
       }
-      HStack(alignment: .center, spacing: 28) {
-        TextTabs(
-          options: BrowseArrangement.allCases, selection: $arrangement, title: \.title)
-        if categories.count > 1 {
-          Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 16)
-          TextTabs(
-            options: [nil] + categories.map(Optional.some), selection: $category,
-            title: { $0?.title ?? "All" })
-        }
-        Spacer()
-        if arrangement == .series {
-          Menu {
-            Picker("Sort By", selection: $sort) {
-              ForEach(SeriesSort.allCases) { option in
-                Text(option.title).tag(option)
-              }
-            }
-            .pickerStyle(.inline)
-          } label: {
-            HStack(spacing: 5) {
-              Text("Sort:").foregroundStyle(ReaderTheme.secondaryText)
-              Text(sort.title).foregroundStyle(.white)
-              Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(ReaderTheme.secondaryText)
-            }
-            .font(.system(size: 13, weight: .semibold))
+      // Every tab in one row where there is room, as on the Mac; in a narrow
+      // window, the categories under the arrangements, scrolling if need be.
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .center, spacing: 28) {
+          arrangementTabs
+          if categories.count > 1 {
+            Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 16)
+            categoryTabs(categories)
           }
-          .menuStyle(.borderlessButton)
-          .menuIndicator(.hidden)
-          .fixedSize()
+          Spacer()
+          sortMenu
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(alignment: .center, spacing: 16) {
+            arrangementTabs
+            Spacer(minLength: 0)
+            sortMenu
+          }
+          if categories.count > 1 {
+            ScrollView(.horizontal) {
+              categoryTabs(categories)
+            }
+            .scrollIndicators(.never)
+          }
         }
       }
       .padding(.bottom, 6)
       .overlay(alignment: .bottom) {
         Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
       }
+    }
+  }
+
+  private var arrangementTabs: some View {
+    TextTabs(options: BrowseArrangement.allCases, selection: $arrangement, title: \.title)
+  }
+
+  private func categoryTabs(_ categories: [PublicationCategory]) -> some View {
+    TextTabs(
+      options: [nil] + categories.map(Optional.some), selection: $category,
+      title: { $0?.title ?? "All" })
+  }
+
+  @ViewBuilder
+  private var sortMenu: some View {
+    if arrangement == .series {
+      Menu {
+        Picker("Sort By", selection: $sort) {
+          ForEach(SeriesSort.allCases) { option in
+            Text(option.title).tag(option)
+          }
+        }
+        .pickerStyle(.inline)
+      } label: {
+        HStack(spacing: 5) {
+          Text("Sort:").foregroundStyle(ReaderTheme.secondaryText)
+          Text(sort.title).foregroundStyle(.white)
+          Image(systemName: "chevron.down")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(ReaderTheme.secondaryText)
+        }
+        .font(.system(size: 13, weight: .semibold))
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
     }
   }
 
@@ -536,6 +570,7 @@ struct SearchResultsView: View {
   @ObservedObject var model: ApplicationModel
   let query: String
   let library: String?
+  @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
     let results = model.series(matching: query, in: library)
@@ -549,7 +584,7 @@ struct SearchResultsView: View {
         }
         SeriesGrid(model: model, series: results, showsLibrary: library == nil)
       }
-      .padding(ReaderTheme.contentPadding)
+      .padding(contentPadding)
     }
     .overlay {
       if results.isEmpty { ContentUnavailableView.search(text: query) }
@@ -567,10 +602,15 @@ struct SeriesGrid: View {
   @ObservedObject var model: ApplicationModel
   let series: [SeriesGroup]
   var showsLibrary = false
+  @Environment(\.isNarrow) private var isNarrow
 
-  private let columns = [
-    GridItem(.adaptive(minimum: 150, maximum: 190), spacing: ReaderTheme.cardSpacing)
-  ]
+  /// Two posters abreast even in a narrow window.
+  private var columns: [GridItem] {
+    [
+      GridItem(
+        .adaptive(minimum: isNarrow ? 120 : 150, maximum: 190), spacing: ReaderTheme.cardSpacing)
+    ]
+  }
 
   var body: some View {
     LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
@@ -656,15 +696,21 @@ struct PublicationGridView: View {
   let publications: [Publication]
   var embedsScrollView = true
   var showsHeader = true
+  @Environment(\.isNarrow) private var isNarrow
+  @Environment(\.contentPadding) private var contentPadding
 
-  private let columns = [
-    GridItem(.adaptive(minimum: 145, maximum: 190), spacing: ReaderTheme.cardSpacing)
-  ]
+  /// Two covers abreast even in a narrow window.
+  private var columns: [GridItem] {
+    [
+      GridItem(
+        .adaptive(minimum: isNarrow ? 120 : 145, maximum: 190), spacing: ReaderTheme.cardSpacing)
+    ]
+  }
 
   var body: some View {
     Group {
       if embedsScrollView {
-        ScrollView { content.padding(ReaderTheme.contentPadding) }
+        ScrollView { content.padding(contentPadding) }
           .navigationTitle(title)
       } else {
         content
@@ -929,7 +975,7 @@ struct CoverBadge: View {
   }
 }
 
-/// Marks a cover whose volume, or some of whose volumes, are on this Mac.
+/// Marks a cover whose volume, or some of whose volumes, are on this device.
 struct DownloadedBadge: View {
   var count: Int?
   var total: Int?

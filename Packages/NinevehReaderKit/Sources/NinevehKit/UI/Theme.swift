@@ -15,6 +15,15 @@ enum ReaderTheme {
   /// A field or a row the pointer is over.
   static let raised = Color.white.opacity(0.08)
   static let sidebarWidth: CGFloat = 236
+  #if os(macOS)
+    /// The top bar's round buttons, sized for a pointer.
+    static let topBarIconSize: CGFloat = 32
+    static let sidebarRowHeight: CGFloat = 40
+  #else
+    /// The top bar's round buttons, big enough for a finger.
+    static let topBarIconSize: CGFloat = 40
+    static let sidebarRowHeight: CGFloat = 44
+  #endif
 
   static let secondaryText = Color.white.opacity(0.6)
   static let tertiaryText = Color.white.opacity(0.38)
@@ -25,13 +34,33 @@ extension View {
   /// its first card stays in line with the page. Cards scroll under the
   /// margin, and the first one's hover growth isn't cut off there.
   func shelfBleed() -> some View {
-    contentMargins(.horizontal, ReaderTheme.contentPadding, for: .scrollContent)
-      .padding(.horizontal, -ReaderTheme.contentPadding)
+    modifier(ShelfBleed())
   }
 
   /// A page's heading, Plex's size: large, bold, and plain white.
   func pageTitleStyle() -> some View {
     font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
+  }
+
+  /// A button that reads as a link: the Mac's link style, or on an iPad,
+  /// which has none, plain text in the tint.
+  @ViewBuilder
+  func linkButtonStyle() -> some View {
+    #if os(macOS)
+      buttonStyle(.link)
+    #else
+      buttonStyle(.plain).foregroundStyle(.tint)
+    #endif
+  }
+}
+
+private struct ShelfBleed: ViewModifier {
+  @Environment(\.contentPadding) private var contentPadding
+
+  func body(content: Content) -> some View {
+    content
+      .contentMargins(.horizontal, contentPadding, for: .scrollContent)
+      .padding(.horizontal, -contentPadding)
   }
 }
 

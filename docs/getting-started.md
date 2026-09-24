@@ -1,7 +1,8 @@
 # Getting started
 
 This guide builds, runs, and installs Nineveh Reader on a Mac. The app requires
-macOS 15 or newer.
+macOS 15 or newer. To run it on an iPad (iPadOS 18 or newer) as well, follow
+steps 1 to 4, then [Run on iPad](#7-run-on-ipad).
 
 ## 1. Install the prerequisites
 
@@ -93,7 +94,43 @@ You can also open a CBZ from Finder with **Open With > Nineveh Reader**. If an
 external file moves or macOS revokes access, remove it from **On My Mac** and
 open it again.
 
-## 7. Install a release build
+## 7. Run on iPad
+
+The iPad app is the **NinevehReader iPad** target in the same project. It
+shares every view with the Mac app and has the same features.
+
+1. Select the **NinevehReader iPad** target and, under **Signing &
+   Capabilities**, choose your team as in step 4. A Personal Team works for
+   your own iPad, though Xcode must reinstall the app every seven days. To
+   avoid that, see
+   [Installing on iPad with AltStore](../README.md#installing-on-ipad-with-altstore).
+2. Choose **NinevehReader iPad** in the scheme selector, then your iPad or an
+   iPad simulator as the destination.
+3. Press **Command-R**. The first time you run on a device, turn on
+   **Settings > Privacy & Security > Developer Mode** on the iPad when asked.
+
+An iPad has no Nineveh of its own, so the server field starts empty. Enter the
+HTTPS address of a server the iPad can reach, for example through Tailscale.
+Plain HTTP to another computer is rejected, as on the Mac.
+
+**On My iPad** takes the place of **On My Mac**:
+
+- **Import…** copies CBZ files from Files into the app.
+- **Open File…** reads each file where it is in Files.
+- Dragging CBZ files in from Files, or sharing one to Nineveh Reader, imports a
+  copy.
+
+Completed downloads have a share button in **Downloads**, for saving the CBZ to
+Files or sending it elsewhere. When the window is narrower than 900 points, as
+with smaller iPads in portrait or apps side by side, the sidebar slides in over
+the library from its button. In a compact-width window the reader also gathers
+its options into a menu. The reader saves your place when you leave the app.
+
+To install on an iPad without Xcode attached, archive with the iPad scheme and
+distribute through TestFlight, or with **Release Testing** or **Debugging** to a
+registered device.
+
+## 8. Install a release build
 
 ### Build a local app from Terminal
 
@@ -147,6 +184,19 @@ xcodebuild \
   build
 ```
 
+Build the iPad app for the simulator the same way:
+
+```sh
+xcodebuild \
+  -project NinevehReader.xcodeproj \
+  -scheme 'NinevehReader iPad' \
+  -configuration Release \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath .build/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
+
 Run the shared unit tests:
 
 ```sh
@@ -179,6 +229,16 @@ The local build script supports the same workaround:
 NINEVEH_DISABLE_SWIFT_SANDBOX=1 ./Scripts/build-local.sh
 ```
 
+`xcodebuild` needs the sandboxes turned off in three places: package
+manifests, plugins, and the compiler's macros (including SwiftUI's own). Add
+these arguments to the commands above:
+
+```sh
+-IDEPackageSupportDisableManifestSandbox=YES \
+-IDEPackageSupportDisablePluginExecutionSandbox=YES \
+OTHER_SWIFT_FLAGS='-Xfrontend -disable-sandbox'
+```
+
 Use the normal Xcode application to build the signed app; do not disable macOS
 system security.
 
@@ -205,10 +265,12 @@ from **On My Mac**, then use **Open File…** to grant access again.
 
 Complete these release-specific steps:
 
-1. Replace the placeholder AppIcon contents with final artwork.
+1. Replace the placeholder AppIcon contents with final artwork, in both
+   `App/Assets.xcassets` and `App/iOS/Assets.xcassets`.
 2. Set the final bundle identifier and Apple Developer team.
 3. Update version, build number, copyright, and support information.
-4. Test a signed Release archive on a clean macOS 15 installation.
+4. Test a signed Release archive on a clean macOS 15 installation, and on an
+   iPad running iPadOS 18.
 5. Supply App Review with an HTTPS-accessible Nineveh test account or an
    appropriate demo catalog.
 6. Review the privacy manifest and App Store privacy answers against the final

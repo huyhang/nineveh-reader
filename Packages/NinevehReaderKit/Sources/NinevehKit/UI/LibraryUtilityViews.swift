@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct DownloadsView: View {
   @ObservedObject var model: ApplicationModel
+  @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
     ScrollView {
@@ -22,6 +23,7 @@ struct DownloadsView: View {
                   record: record,
                   retry: { Task { await model.retryDownload(record) } },
                   reveal: revealAction(for: record),
+                  share: shareURL(for: record),
                   remove: { Task { await model.removeDownload(record) } }
                 )
               }
@@ -30,7 +32,7 @@ struct DownloadsView: View {
           }
         }
       }
-      .padding(ReaderTheme.contentPadding)
+      .padding(contentPadding)
     }
     .overlay {
       if model.shownDownloads.isEmpty {
@@ -65,12 +67,24 @@ struct DownloadsView: View {
       return nil
     #endif
   }
+
+  /// The downloaded file, for an iPad's share sheet, which stands in for the
+  /// Finder there: Save to Files, AirDrop, another app.
+  private func shareURL(for record: DownloadRecord) -> URL? {
+    #if os(iOS)
+      guard record.state == .completed else { return nil }
+      return model.downloadedFileURL(for: record)
+    #else
+      return nil
+    #endif
+  }
 }
 
 private struct DownloadRow: View {
   let record: DownloadRecord
   let retry: () -> Void
   let reveal: (() -> Void)?
+  let share: URL?
   let remove: () -> Void
   @State private var hovering = false
 
@@ -108,6 +122,14 @@ private struct DownloadRow: View {
         .help("Show in Finder")
         .accessibilityLabel("Show \(record.title) in Finder")
       }
+      if let share {
+        ShareLink(item: share) {
+          Image(systemName: "square.and.arrow.up")
+        }
+        .buttonStyle(.chromeIcon)
+        .help("Share")
+        .accessibilityLabel("Share \(record.title)")
+      }
       Button(role: .destructive, action: remove) {
         Image(systemName: "trash")
       }
@@ -140,29 +162,37 @@ private struct DownloadRow: View {
 
 struct LocalLibraryView: View {
   @ObservedObject var model: ApplicationModel
-  @State private var showingImporter = false
-  @State private var showingExternalPicker = false
+  // One picker serves both buttons: a second fileImporter on the same view
+  // may never present.
+  @State private var showingPicker = false
+  @State private var pickerKind = LocalBookKind.imported
+  @Environment(\.isNarrow) private var isNarrow
+  @Environment(\.contentPadding) private var contentPadding
 
-  private let columns = [
-    GridItem(.adaptive(minimum: 145, maximum: 190), spacing: ReaderTheme.cardSpacing)
-  ]
+  private var columns: [GridItem] {
+    [
+      GridItem(
+        .adaptive(minimum: isNarrow ? 120 : 145, maximum: 190), spacing: ReaderTheme.cardSpacing)
+    ]
+  }
   private let cbzType = UTType(filenameExtension: "cbz") ?? .zip
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 26) {
-        HStack {
-          VStack(alignment: .leading, spacing: 5) {
-            Text("On My Mac").pageTitleStyle()
-            Text("Imported books and files kept in their original location.")
-              .font(.system(size: 13, weight: .medium))
-              .foregroundStyle(ReaderTheme.secondaryText)
+        // In a narrow window the buttons go under the title rather than
+        // squeezing it.
+        if isNarrow {
+          VStack(alignment: .leading, spacing: 14) {
+            heading
+            HStack { addButtons }
           }
-          Spacer()
-          Button("Open File…") { showingExternalPicker = true }
-            .buttonStyle(.chrome)
-          Button("Import…") { showingImporter = true }
-            .buttonStyle(.accent)
+        } else {
+          HStack {
+            heading
+            Spacer()
+            addButtons
+          }
         }
 
         if model.localBooks.isEmpty {
@@ -178,7 +208,8 @@ struct LocalLibraryView: View {
             let books = model.localBooks.filter { $0.kind == kind }
             if !books.isEmpty {
               SectionHeading(
-                title: kind == .imported ? "Imported" : "External Files", detail: "On My Mac")
+                title: kind == .imported ? "Imported" : "External Files",
+                detail: LibrarySection.onDevice.title)
               LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
                 ForEach(books) { book in
                   LocalBookCard(model: model, book: book)
@@ -188,33 +219,81 @@ struct LocalLibraryView: View {
           }
         }
       }
-      .padding(ReaderTheme.contentPadding)
+      .padding(contentPadding)
     }
-    .navigationTitle("On My Mac")
+    .navigationTitle(LibrarySection.onDevice.title)
     .fileImporter(
-      isPresented: $showingImporter,
+      isPresented: $showingPicker,
       allowedContentTypes: [cbzType],
       allowsMultipleSelection: true
     ) { result in
       if case .success(let urls) = result {
+        let kind = pickerKind
+        Task { await model.addLocalFiles(urls, kind: kind) }
+      }
+    }
+    #if os(macOS)
+      .dropDestination(for: URL.self) { urls, _ in
         Task { await model.addLocalFiles(urls, kind: .imported) }
+        return true
       }
-    }
-    .fileImporter(
-      isPresented: $showingExternalPicker,
-      allowedContentTypes: [cbzType],
-      allowsMultipleSelection: true
-    ) { result in
-      if case .success(let urls) = result {
-        Task { await model.addLocalFiles(urls, kind: .external) }
+    #else
+      // A book dragged in from Files arrives as a copy, not a URL to it.
+      .dropDestination(for: DroppedBook.self) { books, _ in
+        let urls = books.map(\.url)
+        Task {
+          await model.addLocalFiles(urls, kind: .imported)
+          for url in urls {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+          }
+        }
+        return true
       }
-    }
-    .dropDestination(for: URL.self) { urls, _ in
-      Task { await model.addLocalFiles(urls, kind: .imported) }
-      return true
+    #endif
+  }
+
+  private var heading: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      Text(LibrarySection.onDevice.title).pageTitleStyle()
+      Text("Imported books and files kept in their original location.")
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(ReaderTheme.secondaryText)
     }
   }
+
+  @ViewBuilder
+  private var addButtons: some View {
+    Button("Open File…") {
+      pickerKind = .external
+      showingPicker = true
+    }
+    .buttonStyle(.chrome)
+    Button("Import…") {
+      pickerKind = .imported
+      showingPicker = true
+    }
+    .buttonStyle(.accent)
+  }
 }
+
+#if os(iOS)
+  /// A CBZ dropped on the page, copied out of the drag into a folder of its own
+  /// so it keeps its name until it is imported.
+  private struct DroppedBook: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+      FileRepresentation(importedContentType: UTType(filenameExtension: "cbz") ?? .zip) {
+        received in
+        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appending(path: received.file.lastPathComponent)
+        try FileManager.default.copyItem(at: received.file, to: copy)
+        return DroppedBook(url: copy)
+      }
+    }
+  }
+#endif
 
 private struct LocalBookCard: View {
   @ObservedObject var model: ApplicationModel
@@ -283,17 +362,18 @@ private struct LocalBookActions: View {
     Button(role: .destructive) {
       Task { await model.removeLocalBook(book) }
     } label: {
-      Label("Remove from On My Mac", systemImage: "trash")
+      Label("Remove from \(LibrarySection.onDevice.title)", systemImage: "trash")
     }
     .help(
       book.kind == .imported
         ? "Delete the imported copy. The original file is left alone."
-        : "Forget this file. It stays where it is on your Mac.")
+        : "Forget this file. It stays where it is on your \(Device.name).")
   }
 }
 
 struct SettingsView: View {
   @ObservedObject var model: ApplicationModel
+  @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
     Form {
@@ -333,7 +413,7 @@ struct SettingsView: View {
           Text("Libraries")
         } footer: {
           Text(
-            "A library that is turned off leaves the sidebar, Home, Search, and Downloads. Its downloads stay on this Mac."
+            "A library that is turned off leaves the sidebar, Home, Search, and Downloads. Its downloads stay on this \(Device.name)."
           )
           .foregroundStyle(.secondary)
         }
@@ -353,7 +433,7 @@ struct SettingsView: View {
     .formStyle(.grouped)
     .scrollContentBackground(.hidden)
     .navigationTitle("Settings")
-    .padding(.horizontal, ReaderTheme.contentPadding)
+    .padding(.horizontal, contentPadding)
   }
 
   private func shown(_ library: String) -> Binding<Bool> {

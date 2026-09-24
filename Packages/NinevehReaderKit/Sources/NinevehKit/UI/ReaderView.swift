@@ -4,6 +4,8 @@ import SwiftUI
 
 #if os(macOS)
   import AppKit
+#elseif os(iOS)
+  import UIKit
 #endif
 
 public struct ReaderView: View {
@@ -17,6 +19,9 @@ public struct ReaderView: View {
   @State private var isFullScreen = false
   @State private var measuredTitleRow: TitleRowMetrics?
   @State private var topBarHeight: CGFloat = 32
+  /// The bottom bar with its margin, which a finger-sized bar on an iPad makes
+  /// taller than the Mac's.
+  @State private var bottomBarHeight: CGFloat = 48
   @State private var scrollPosition = ScrollPosition(idType: Int.self)
   @State private var scrollOffset: CGFloat = 0
   /// The page a continuous view is still being scrolled to; until it arrives,
@@ -25,9 +30,14 @@ public struct ReaderView: View {
   @State private var stripPositioned = false
   #if os(macOS)
     @State private var scrollMonitor = ScrollTurnMonitor()
+  #else
+    /// How tall the stage is, for scrolling by a share of the screen.
+    @State private var viewportHeight: CGFloat = 800
+    @Environment(\.scenePhase) private var scenePhase
   #endif
   @FocusState private var focused: Bool
   @Environment(\.displayScale) private var displayScale
+  @Environment(\.isNarrow) private var isNarrow
   private let onClose: () -> Void
 
   /// How long the controls stay up after the pointer or a tap last asked for them.
@@ -84,6 +94,17 @@ public struct ReaderView: View {
       .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification))
       { _ in isFullScreen = false }
       .onAppear { isFullScreen = NSApp.keyWindow?.styleMask.contains(.fullScreen) ?? false }
+    #else
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
+      // The status bar stays hidden rather than coming and going with the
+      // controls, so the stage, and the continuous strip laid out to it, keep
+      // their size. The home indicator does follow the controls.
+      .statusBarHidden()
+      .persistentSystemOverlays(chromeVisible ? .automatic : .hidden)
+      .onChange(of: scenePhase) { _, phase in
+        // Leaving the screen, the place is saved before iOS suspends the app.
+        if phase != .active { flushInBackground(model) }
+      }
     #endif
   }
 
@@ -135,7 +156,11 @@ public struct ReaderView: View {
         }
       }
       .padding(.top, chromeVisible ? topBarHeight + 8 : 10)
-      .padding(.bottom, chromeVisible ? 58 : 10)
+      #if os(macOS)
+        .padding(.bottom, chromeVisible ? 58 : 10)
+      #else
+        .padding(.bottom, chromeVisible ? bottomBarHeight + 4 : 10)
+      #endif
       .padding(.horizontal, 10)
       .frame(width: size.width * zoom, height: size.height * zoom)
       .animation(.easeOut(duration: 0.2), value: chromeVisible)
@@ -274,18 +299,25 @@ public struct ReaderView: View {
     return HStack(spacing: 12) {
       leaveButton
       titleBlock
-      if model.context.volumes.count > 1 { volumeControls }
-      modePicker
-      directionButton
-      fullScreenButton
+      if isNarrow {
+        // A narrow window keeps the volume and folds the rest into a menu.
+        if model.context.volumes.count > 1 { volumeMenu }
+        readingOptionsMenu
+      } else {
+        if model.context.volumes.count > 1 { volumeControls }
+        modePicker
+        directionButton
+        fullScreenButton
+      }
     }
-    .buttonStyle(.borderless)
+    .readerBarButtonStyle()
     .controlSize(.regular)
     .padding(.leading, row?.leadingInset ?? 14)
     .padding(.trailing, 14)
     .padding(.vertical, row == nil ? 7 : 3)
     // Centred on the window buttons.
     .frame(minHeight: row?.height ?? 0)
+    .clearsWindowControls()
     .background(.ultraThinMaterial)
     .overlay(alignment: .bottom) { Divider().opacity(0.4) }
     .contentShape(Rectangle())
@@ -304,6 +336,9 @@ public struct ReaderView: View {
     } label: {
       Label(inSeries ? "Series" : "Close", systemImage: "chevron.backward")
     }
+    #if os(iOS)
+      .labelStyle(ConditionalIconOnlyLabelStyle(iconOnly: isNarrow))
+    #endif
     .help(inSeries ? "Back to the series" : "Close the reader")
   }
 
@@ -353,6 +388,36 @@ public struct ReaderView: View {
     .help(directionHelp)
   }
 
+  /// The reading mode and direction, in one menu for a narrow window.
+  private var readingOptionsMenu: some View {
+    let model = model
+    let selection = Binding<ReadingMode>(get: { model.mode }, set: { model.setMode($0) })
+    let symbol = model.direction == .rightToLeft ? "arrow.left" : "arrow.right"
+    return Menu {
+      Picker("Reading Mode", selection: selection) {
+        ForEach(ReadingMode.allCases, id: \.self) { mode in
+          Label(mode.title, systemImage: mode.systemImage).tag(mode)
+        }
+      }
+      Button {
+        model.cycleDirection()
+      } label: {
+        Label("Direction: \(model.directionPreference.shortTitle)", systemImage: symbol)
+      }
+    } label: {
+      Label("Reading Options", systemImage: "ellipsis.circle")
+        .labelStyle(.iconOnly)
+        #if os(iOS)
+          .frame(minWidth: 44, minHeight: 44)
+        #endif
+    }
+    .menuIndicator(.hidden)
+    .fixedSize()
+    #if os(iOS)
+      .tint(.white)
+    #endif
+  }
+
   @ViewBuilder
   private var fullScreenButton: some View {
     #if os(macOS)
@@ -368,7 +433,6 @@ public struct ReaderView: View {
 
   private var volumeControls: some View {
     let context = model.context
-    let current = context.currentIndex ?? 0
     return HStack(spacing: 2) {
       Button {
         if let previous = context.previous { open(previous) }
@@ -379,27 +443,7 @@ public struct ReaderView: View {
       .help("Previous volume ([)")
       .accessibilityLabel("Previous volume")
 
-      Menu {
-        ForEach(Array(context.volumes.enumerated()), id: \.element.id) { index, volume in
-          Button {
-            if index != current { open(volume) }
-          } label: {
-            if index == current {
-              Label(volume.menuTitle, systemImage: "checkmark")
-            } else {
-              Text(volume.menuTitle)
-            }
-          }
-        }
-      } label: {
-        Label("\(current + 1) / \(context.volumes.count)", systemImage: "books.vertical")
-          .labelStyle(.titleAndIcon)
-          .monospacedDigit()
-      }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .fixedSize()
-      .help("Volumes in this series")
+      volumeMenu
 
       Button {
         if let next = context.next { open(next) }
@@ -412,16 +456,50 @@ public struct ReaderView: View {
     }
   }
 
+  private var volumeMenu: some View {
+    let context = model.context
+    let current = context.currentIndex ?? 0
+    return Menu {
+      ForEach(Array(context.volumes.enumerated()), id: \.element.id) { index, volume in
+        Button {
+          if index != current { open(volume) }
+        } label: {
+          if index == current {
+            Label(volume.menuTitle, systemImage: "checkmark")
+          } else {
+            Text(volume.menuTitle)
+          }
+        }
+      }
+    } label: {
+      Label("\(current + 1) / \(context.volumes.count)", systemImage: "books.vertical")
+        .labelStyle(.titleAndIcon)
+        .monospacedDigit()
+        #if os(iOS)
+          .frame(minHeight: 44)
+        #endif
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    #if os(iOS)
+      .tint(.white)
+    #endif
+    .help("Volumes in this series")
+  }
+
   private var bottomBar: some View {
     let pageCount = model.pageCount
     let draftPage = sliderDraft.map { Int($0.rounded()) }
     let label = draftPage.map { model.layout.label(for: $0, mode: model.mode) } ?? model.pageLabel
+    // A narrow window leaves page turning to taps and swipes, and the sync
+    // status to its symbol.
     return HStack(spacing: 12) {
-      arrowButton(pointingRight: false)
+      if !isNarrow { arrowButton(pointingRight: false) }
       Text(model.isFinished ? "Finished" : label)
         .monospacedDigit()
         .font(.callout.weight(.medium))
-        .frame(minWidth: 92)
+        .frame(minWidth: isNarrow ? 72 : 92)
       Slider(
         value: Binding(
           get: { sliderDraft ?? Double(model.page) },
@@ -443,27 +521,33 @@ public struct ReaderView: View {
       .disabled(pageCount < 2)
       // The slider runs the way the pages do, so right to left starts at the right.
       .scaleEffect(x: model.direction == .rightToLeft ? -1 : 1, y: 1)
-      .frame(minWidth: 160, maxWidth: 460)
+      .frame(minWidth: isNarrow ? 100 : 160, maxWidth: 460)
       .accessibilityLabel("Page")
       .accessibilityValue(label)
-      arrowButton(pointingRight: true)
+      if !isNarrow { arrowButton(pointingRight: true) }
       // A stack, not a group, so the space stays put while there is no status.
       ZStack(alignment: .leading) {
         if let status = model.syncStatus.title {
           Label(status, systemImage: syncSymbol)
+            #if os(iOS)
+              .labelStyle(ConditionalIconOnlyLabelStyle(iconOnly: isNarrow))
+            #endif
         }
       }
       .font(.caption)
       .foregroundStyle(.secondary)
-      .frame(width: 104, alignment: .leading)
+      .frame(width: isNarrow ? 22 : 104, alignment: .leading)
     }
-    .buttonStyle(.borderless)
+    .readerBarButtonStyle()
     .padding(.horizontal, 16)
     .padding(.vertical, 9)
     .background(.ultraThinMaterial, in: Capsule())
     .overlay(Capsule().strokeBorder(.white.opacity(0.08)))
-    .padding(.horizontal, 20)
+    .padding(.horizontal, isNarrow ? 10 : 20)
     .padding(.bottom, 14)
+    #if os(iOS)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomBarHeight = $0 }
+    #endif
     .onHover(perform: hoverChrome)
   }
 
@@ -568,7 +652,7 @@ public struct ReaderView: View {
     #if os(macOS)
       NSApp.keyWindow?.contentLayoutRect.height ?? 800
     #else
-      800
+      viewportHeight
     #endif
   }
 
@@ -741,6 +825,72 @@ extension ReadingMode {
     }
   }
 }
+
+extension View {
+  /// The reader bars' buttons: borderless on the Mac, and on an iPad, white
+  /// symbols with room for a finger.
+  @ViewBuilder
+  fileprivate func readerBarButtonStyle() -> some View {
+    #if os(macOS)
+      buttonStyle(.borderless)
+    #else
+      buttonStyle(ReaderBarButtonStyle())
+    #endif
+  }
+}
+
+#if os(iOS)
+  /// Shows a label's symbol alone when asked to, and otherwise leaves the
+  /// label to the style around it.
+  private struct ConditionalIconOnlyLabelStyle: LabelStyle {
+    let iconOnly: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+      if iconOnly {
+        Label(configuration).labelStyle(.iconOnly)
+      } else {
+        Label(configuration)
+      }
+    }
+  }
+
+  private struct ReaderBarButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+      configuration.label
+        .foregroundStyle(.white)
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
+        .opacity(isEnabled ? (configuration.isPressed ? 0.5 : 1) : 0.3)
+    }
+  }
+
+  /// Saves the reader's place as the app leaves the screen, in the time iOS
+  /// gives an app to finish up before it is suspended.
+  @MainActor
+  private func flushInBackground(_ model: ReaderSessionModel) {
+    let task = BackgroundTask()
+    task.identifier = UIApplication.shared.beginBackgroundTask(withName: "Save reading position") {
+      task.end()
+    }
+    Task {
+      await model.flush()
+      task.end()
+    }
+  }
+
+  @MainActor
+  private final class BackgroundTask {
+    var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    func end() {
+      guard identifier != .invalid else { return }
+      UIApplication.shared.endBackgroundTask(identifier)
+      identifier = .invalid
+    }
+  }
+#endif
 
 typealias PageLoader = @MainActor (_ page: Int, _ width: Int?) async throws -> CGImage
 

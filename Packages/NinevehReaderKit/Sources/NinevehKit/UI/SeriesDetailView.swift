@@ -24,8 +24,15 @@ private struct SeriesPage: View {
   @State private var coverData: Data?
   @State private var showsFullDescription = false
   @Environment(\.openURL) private var openURL
+  @Environment(\.isNarrow) private var isNarrow
+  @Environment(\.contentPadding) private var contentPadding
 
-  private let columns = [GridItem(.adaptive(minimum: 330, maximum: 480), spacing: 18)]
+  /// Cards side by side, or in a narrow window, one under another.
+  private var columns: [GridItem] {
+    isNarrow
+      ? [GridItem(.flexible(), spacing: 18)]
+      : [GridItem(.adaptive(minimum: 330, maximum: 480), spacing: 18)]
+  }
 
   var body: some View {
     let detail = model.detail(for: series)
@@ -36,7 +43,7 @@ private struct SeriesPage: View {
         if let metadata { about(metadata) }
         volumes
       }
-      .padding(ReaderTheme.contentPadding)
+      .padding(contentPadding)
       .frame(maxWidth: 1_180, alignment: .leading)
       .frame(maxWidth: .infinity)
     }
@@ -75,7 +82,8 @@ private struct SeriesPage: View {
 
   private func hero(detail: SeriesDetail?, metadata: SeriesMetadata?) -> some View {
     let progress = model.progress(for: series)
-    return HStack(alignment: .top, spacing: 32) {
+    let layout = heroLayout(narrow: isNarrow)
+    return layout {
       CoverArtwork(data: coverData, title: series.title, category: series.category)
         .frame(width: 220, height: 330)
         .accessibilityLabel("Cover of \(model.displayTitle(for: series))")
@@ -180,7 +188,7 @@ private struct SeriesPage: View {
   }
 
   private var actions: some View {
-    HStack(spacing: 10) {
+    ActionRow {
       if let next = nextToRead {
         Button {
           Task { await model.beginReading(next.publication, fromStart: next.fromStart) }
@@ -262,7 +270,7 @@ private struct SeriesPage: View {
             Button(showsFullDescription ? "Show Less" : "Show More") {
               withAnimation(.easeOut(duration: 0.2)) { showsFullDescription.toggle() }
             }
-            .buttonStyle(.link)
+            .linkButtonStyle()
           }
         }
       }
@@ -402,24 +410,26 @@ private struct VolumeCard: View {
         Spacer(minLength: 4)
 
         HStack(spacing: 8) {
-          if let page = progress.resumePage {
-            // The progress line above already names the page.
-            Button("Resume") {
-              Task { await model.beginReading(publication) }
+          ActionRow(spacing: 8) {
+            if let page = progress.resumePage {
+              // The progress line above already names the page.
+              Button("Resume") {
+                Task { await model.beginReading(publication) }
+              }
+              .buttonStyle(.accent)
+              .help("Resume at page \(page)")
+              .fixedSize()
+              Button("Start over") {
+                Task { await model.beginReading(publication, fromStart: true) }
+              }
+              .buttonStyle(.chrome)
+              .fixedSize()
+            } else {
+              Button("Read from start") {
+                Task { await model.beginReading(publication, fromStart: true) }
+              }
+              .buttonStyle(.accent)
             }
-            .buttonStyle(.accent)
-            .help("Resume at page \(page)")
-            .fixedSize()
-            Button("Start over") {
-              Task { await model.beginReading(publication, fromStart: true) }
-            }
-            .buttonStyle(.chrome)
-            .fixedSize()
-          } else {
-            Button("Read from start") {
-              Task { await model.beginReading(publication, fromStart: true) }
-            }
-            .buttonStyle(.accent)
           }
           Spacer(minLength: 0)
           Menu {
@@ -469,13 +479,16 @@ private struct VolumeCard: View {
 struct PublicationDetailView: View {
   @ObservedObject var model: ApplicationModel
   let publication: Publication
+  @Environment(\.isNarrow) private var isNarrow
+  @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
     let series = model.series(containing: publication)
     let progress = model.progress(for: publication)
+    let hero = heroLayout(narrow: isNarrow)
     ScrollView {
       VStack(alignment: .leading, spacing: 30) {
-        HStack(alignment: .top, spacing: 32) {
+        hero {
           CoverImageView(model: model, publication: publication)
             .frame(width: 220, height: 330)
 
@@ -489,7 +502,7 @@ struct PublicationDetailView: View {
                 .font(.caption.weight(.semibold))
                 .textCase(.uppercase)
               }
-              .buttonStyle(.link)
+              .linkButtonStyle()
             }
             Text(publication.title)
               .font(.system(size: 32, weight: .heavy))
@@ -550,7 +563,7 @@ struct PublicationDetailView: View {
           }
         }
       }
-      .padding(ReaderTheme.contentPadding)
+      .padding(contentPadding)
     }
     .navigationTitle(publication.title)
   }
@@ -568,7 +581,7 @@ struct PublicationDetailView: View {
   }
 
   private func actionButtons(_ progress: VolumeProgress) -> some View {
-    HStack(spacing: 10) {
+    ActionRow {
       if let page = progress.resumePage {
         Button {
           Task { await model.beginReading(publication) }
@@ -633,6 +646,13 @@ struct PublicationDetailView: View {
 }
 
 // MARK: - Layout
+
+/// A detail page's cover beside its text, or in a narrow window, above it.
+private func heroLayout(narrow: Bool) -> AnyLayout {
+  narrow
+    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 24))
+    : AnyLayout(HStackLayout(alignment: .top, spacing: 32))
+}
 
 /// Lays views out in rows, wrapping when a row is full, like tags on the web.
 struct FlowLayout: Layout {

@@ -6,7 +6,8 @@ enum LibrarySection: Hashable {
   case browse
   case library(String)
   case downloads
-  case onMyMac
+  /// "On My Mac", or "On My iPad".
+  case onDevice
   case settings
 
   var title: String {
@@ -15,7 +16,7 @@ enum LibrarySection: Hashable {
     case .browse: "All Series"
     case .library(let name): name
     case .downloads: "Downloads"
-    case .onMyMac: "On My Mac"
+    case .onDevice: "On My \(Device.name)"
     case .settings: "Settings"
     }
   }
@@ -26,14 +27,14 @@ enum LibrarySection: Hashable {
     case .browse: "square.grid.2x2"
     case .library: "books.vertical"
     case .downloads: "arrow.down.circle"
-    case .onMyMac: "macbook"
+    case .onDevice: Device.symbol
     case .settings: "gearshape"
     }
   }
 
   /// The icon filled in, where there is a filled one.
   var selectedIcon: String {
-    if case .onMyMac = self { return icon }
+    if case .onDevice = self { return icon }
     return "\(icon).fill"
   }
 
@@ -46,7 +47,7 @@ enum LibrarySection: Hashable {
   var isSearchable: Bool {
     switch self {
     case .home, .browse, .library: true
-    case .downloads, .onMyMac, .settings: false
+    case .downloads, .onDevice, .settings: false
     }
   }
 }
@@ -56,6 +57,11 @@ struct LibraryShellView: View {
   @State private var selection: LibrarySection
   @State private var search = ""
   @State private var sidebarShown = true
+  #if os(iOS)
+    /// How wide the library is, which decides whether the sidebar sits beside
+    /// the page or slides over it.
+    @State private var width: CGFloat = 0
+  #endif
   private let initiallyShowsOrganizedBrowse: Bool
 
   init(model: ApplicationModel, initiallyShowsOrganizedBrowse: Bool = false) {
@@ -65,60 +71,143 @@ struct LibraryShellView: View {
   }
 
   var body: some View {
-    HStack(spacing: 0) {
-        if sidebarShown {
-          LibrarySidebar(model: model, selection: $selection)
-            .transition(.move(edge: .leading))
+    shell
+      .onChange(of: selection) { _, _ in
+        // Each section starts at its own top level.
+        model.libraryPath = []
+        closeOverlaidSidebar()
+      }
+      .onChange(of: search) { _, value in
+        guard !value.isEmpty else { return }
+        model.libraryPath = []
+        // A search from a page that can't show one looks through everything.
+        if !selection.isSearchable { selection = .browse }
+      }
+      .refreshable { await model.refresh() }
+  }
+
+  #if os(macOS)
+    private var shell: some View {
+      content
+        // The window's toolbar is the top bar, drawn over the same charcoal as
+        // the sidebar, with the window's buttons beside it as in Plex.
+        .background(ReaderTheme.chrome, ignoresSafeAreaEdges: .all)
+        .toolbar {
+          ToolbarItem(placement: .navigation) {
+            TopBarLeading(
+              model: model, search: $search, selection: $selection, sidebarShown: $sidebarShown)
+          }
+          .withoutGlass()
+          if #available(macOS 26, *) {
+            ToolbarSpacer(.flexible)
+          }
+          ToolbarItem(placement: .primaryAction) {
+            TopBarTrailing(model: model, selection: $selection)
+          }
+          .withoutGlass()
         }
-        NavigationStack(path: $model.libraryPath) {
+        .toolbar(removing: .title)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    }
+  #else
+    private var shell: some View {
+      // An iPad has no window toolbar to put the top bar in, so it is drawn
+      // here, over the same charcoal as the sidebar.
+      VStack(spacing: 0) {
+        HStack(spacing: 0) {
+          TopBarLeading(
+            model: model, search: $search, selection: $selection, sidebarShown: $sidebarShown
+          )
+          .layoutPriority(1)
+          Spacer(minLength: 8)
+          TopBarTrailing(model: model, selection: $selection)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 56)
+        .clearsWindowControls()
+        content
+      }
+      .background(ReaderTheme.chrome, ignoresSafeAreaEdges: .all)
+      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+      .onChange(of: sidebarOverlays, initial: true) { _, overlays in
+        // Beside a wide page the sidebar stays out; over a narrow one it
+        // waits to be asked for.
+        sidebarShown = !overlays
+      }
+    }
+  #endif
+
+  /// Whether the sidebar slides over the page rather than sitting beside it,
+  /// as it does in an iPad window too narrow to spare it the room.
+  private var sidebarOverlays: Bool {
+    #if os(iOS)
+      width < 900
+    #else
+      false
+    #endif
+  }
+
+  private func closeOverlaidSidebar() {
+    guard sidebarOverlays, sidebarShown else { return }
+    withAnimation(.easeOut(duration: 0.2)) { sidebarShown = false }
+  }
+
+  /// The sidebar and the page it leads to.
+  private var content: some View {
+    HStack(spacing: 0) {
+      if sidebarShown, !sidebarOverlays {
+        sidebar
+      }
+      NavigationStack(path: $model.libraryPath) {
+        ZStack {
+          QuietBackground()
+          destination
+        }
+        #if os(iOS)
+          .toolbar(.hidden, for: .navigationBar)
+        #endif
+        .navigationDestination(for: LibraryRoute.self) { route in
           ZStack {
             QuietBackground()
-            destination
+            routeView(route)
           }
-          .navigationDestination(for: LibraryRoute.self) { route in
-            ZStack {
-              QuietBackground()
-              routeView(route)
-            }
-            // Going back is the top bar's.
+          // Going back is the top bar's.
+          #if os(macOS)
             .navigationBarBackButtonHidden()
-          }
+          #else
+            .toolbar(.hidden, for: .navigationBar)
+          #endif
         }
-        .clipped()
+      }
+      .clipped()
+    }
+    .overlay(alignment: .leading) {
+      // Two layers, so the page dims in place while the sidebar slides in.
+      ZStack(alignment: .leading) {
+        if sidebarShown, sidebarOverlays {
+          Color.black.opacity(0.45)
+            .contentShape(Rectangle())
+            .onTapGesture { closeOverlaidSidebar() }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Hide Sidebar")
+            .transition(.opacity)
+        }
+        if sidebarShown, sidebarOverlays {
+          sidebar
+        }
+      }
     }
     .overlay(alignment: .top) {
       Rectangle().fill(.black.opacity(0.35)).frame(height: 1)
     }
-    // The window's toolbar is the top bar, drawn over the same charcoal as
-    // the sidebar, with the window's buttons beside it as in Plex.
-    .background(ReaderTheme.chrome, ignoresSafeAreaEdges: .all)
-    .toolbar {
-      ToolbarItem(placement: .navigation) {
-        TopBarLeading(
-          model: model, search: $search, selection: $selection, sidebarShown: $sidebarShown)
-      }
-      .withoutGlass()
-      if #available(macOS 26, iOS 26, *) {
-        ToolbarSpacer(.flexible)
-      }
-      ToolbarItem(placement: .primaryAction) {
-        TopBarTrailing(model: model, selection: $selection)
-      }
-      .withoutGlass()
+  }
+
+  private var sidebar: some View {
+    LibrarySidebar(model: model, selection: $selection) {
+      // Choosing the section already chosen still puts an overlaid sidebar away.
+      closeOverlaidSidebar()
     }
-    .toolbar(removing: .title)
-    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-    .onChange(of: selection) { _, _ in
-      // Each section starts at its own top level.
-      model.libraryPath = []
-    }
-    .onChange(of: search) { _, value in
-      guard !value.isEmpty else { return }
-      model.libraryPath = []
-      // A search from a page that can't show one looks through everything.
-      if !selection.isSearchable { selection = .browse }
-    }
-    .refreshable { await model.refresh() }
+    .transition(.move(edge: .leading))
   }
 
   @ViewBuilder
@@ -137,7 +226,7 @@ struct LibraryShellView: View {
         BrowseView(model: model, library: name).id(name)
       case .downloads:
         DownloadsView(model: model)
-      case .onMyMac:
+      case .onDevice:
         LocalLibraryView(model: model)
       case .settings:
         SettingsView(model: model)
@@ -170,6 +259,7 @@ private struct TopBarLeading: View {
   @Binding var selection: LibrarySection
   @Binding var sidebarShown: Bool
   @FocusState private var searchFocused: Bool
+  @Environment(\.isNarrow) private var isNarrow
 
   var body: some View {
     HStack(spacing: 6) {
@@ -190,20 +280,28 @@ private struct TopBarLeading: View {
       .disabled(model.libraryPath.isEmpty)
       .help("Back")
 
-      Button {
-        search = ""
-        selection = .home
-      } label: {
-        Wordmark()
+      // A narrow window keeps its room for search.
+      if !isNarrow {
+        Button {
+          search = ""
+          selection = .home
+        } label: {
+          Wordmark()
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .help("Home")
       }
-      .buttonStyle(.plain)
-      .padding(.horizontal, 12)
-      .help("Home")
 
       searchField
-        .frame(width: 400)
+        #if os(macOS)
+          .frame(width: 400)
+        #else
+          .frame(minWidth: 100, maxWidth: 400)
+          .layoutPriority(1)
+        #endif
     }
-    .buttonStyle(.chromeIcon(size: 32))
+    .buttonStyle(.chromeIcon(size: ReaderTheme.topBarIconSize))
     .padding(.leading, 6)
   }
 
@@ -217,7 +315,17 @@ private struct TopBarLeading: View {
         .font(.system(size: 14))
         .foregroundStyle(.white)
         .focused($searchFocused)
-        .onExitCommand { search = "" }
+        #if os(macOS)
+          .onExitCommand { search = "" }
+        #else
+          .onKeyPress(.escape) {
+            search = ""
+            return .handled
+          }
+          .autocorrectionDisabled()
+          .textInputAutocapitalization(.never)
+          .submitLabel(.search)
+        #endif
       if !search.isEmpty {
         Button {
           search = ""
@@ -265,7 +373,7 @@ private struct TopBarTrailing: View {
       }
       .help("Settings")
     }
-    .buttonStyle(.chromeIcon(size: 32))
+    .buttonStyle(.chromeIcon(size: ReaderTheme.topBarIconSize))
   }
 
   private var refreshButton: some View {
@@ -288,7 +396,7 @@ private struct TopBarTrailing: View {
         }
       }
       .foregroundStyle(.white.opacity(0.8))
-      .frame(width: 32, height: 32)
+      .frame(width: ReaderTheme.topBarIconSize, height: ReaderTheme.topBarIconSize)
       .contentShape(Circle())
     } primaryAction: {
       Task { await model.refresh() }
@@ -332,6 +440,7 @@ extension ToolbarContent {
 private struct LibrarySidebar: View {
   @ObservedObject var model: ApplicationModel
   @Binding var selection: LibrarySection
+  var chose: () -> Void = {}
 
   var body: some View {
     VStack(spacing: 0) {
@@ -347,7 +456,7 @@ private struct LibrarySidebar: View {
           }
           heading("Offline")
           row(.downloads, badge: model.shownDownloads.filter { $0.state != .completed }.count)
-          row(.onMyMac, badge: model.localBooks.count)
+          row(.onDevice, badge: model.localBooks.count)
         }
         .padding(.vertical, 12)
       }
@@ -372,6 +481,7 @@ private struct LibrarySidebar: View {
   private func row(_ section: LibrarySection, badge: Int = 0) -> some View {
     SidebarRow(section: section, badge: badge, isSelected: selection == section) {
       selection = section
+      chose()
     }
   }
 }
@@ -403,7 +513,7 @@ private struct SidebarRow: View {
       .foregroundStyle(isSelected || hovering ? .white : .white.opacity(0.78))
       .padding(.leading, 22)
       .padding(.trailing, 18)
-      .frame(height: 40)
+      .frame(height: ReaderTheme.sidebarRowHeight)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background {
         if isSelected {
