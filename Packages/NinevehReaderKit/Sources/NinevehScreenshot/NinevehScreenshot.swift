@@ -82,14 +82,26 @@
       controller.sceneBridgingOptions = [.toolbars, .title]
       let window = NSWindow(contentViewController: controller)
       window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+      // As the app's `.windowToolbarStyle(.unified(showsTitle: false))` has it.
+      window.toolbarStyle = .unified
       window.setContentSize(NSSize(width: 1_180, height: 780))
       window.center()
       window.makeKeyAndOrderFront(nil)
       application.activate()
 
       Task {
-        // Opened a moment after the library, as it is in the app.
+        // Opened a moment after the library, as it is in the app. The library
+        // is captured first, then with a page pushed, whose back button must
+        // not bring a toolbar of its own.
         try? await Task.sleep(for: .milliseconds(800))
+        capture(window, to: sibling(of: output, named: "library"))
+        if let series = model.seriesGroups.first {
+          model.libraryPath = [.series(series.key)]
+          try? await Task.sleep(for: .milliseconds(600))
+          capture(window, to: sibling(of: output, named: "pushed"))
+          model.libraryPath = []
+          try? await Task.sleep(for: .milliseconds(300))
+        }
         model.presentedReader = destination(for: archive)
         try? await Task.sleep(for: .milliseconds(idle ? 5_000 : 1_500))
         capture(window, to: output)
@@ -130,6 +142,11 @@
           currentIndex: 0),
         actions: ReaderActions(showSeries: {})
       )
+    }
+
+    private static func sibling(of output: URL, named suffix: String) -> URL {
+      let stem = output.deletingPathExtension().lastPathComponent
+      return output.deletingLastPathComponent().appending(path: "\(stem)-\(suffix).png")
     }
 
     private static func capture(_ window: NSWindow, to output: URL) {

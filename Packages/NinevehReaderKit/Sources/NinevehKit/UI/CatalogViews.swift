@@ -19,16 +19,18 @@ struct HomeView: View {
 
         if !continueReading.isEmpty {
           PublicationShelf(
-            model: model, title: "Continue Reading", publications: continueReading,
-            opensReader: true)
+            model: model, title: "Continue Reading", detail: source,
+            publications: continueReading, opensReader: true)
         }
 
         if !upNext.isEmpty {
-          PublicationShelf(model: model, title: "Up Next", publications: upNext, opensReader: true)
+          PublicationShelf(
+            model: model, title: "Up Next", detail: source, publications: upNext,
+            opensReader: true)
         }
 
         ForEach(seriesShelves, id: \.title) { shelf in
-          SeriesShelf(model: model, title: shelf.title, series: shelf.series)
+          SeriesShelf(model: model, title: shelf.title, detail: shelf.detail, series: shelf.series)
         }
       }
       .padding(ReaderTheme.contentPadding)
@@ -53,14 +55,22 @@ struct HomeView: View {
     .navigationTitle("Home")
   }
 
+  /// Where Home's shelves come from, when that is one library.
+  private var source: String? {
+    model.libraries.count == 1 ? model.libraries.first?.name : nil
+  }
+
   /// One shelf per library when there are several, otherwise one per category.
-  private var seriesShelves: [(title: String, series: [SeriesGroup])] {
+  private var seriesShelves: [(title: String, detail: String?, series: [SeriesGroup])] {
     let libraries = model.libraries.map(\.name).filter { !model.seriesGroups(in: $0).isEmpty }
     if libraries.count > 1 {
-      return libraries.map { (title: $0, series: model.seriesGroups(in: $0)) }
+      return libraries.map { (title: $0, detail: nil, series: model.seriesGroups(in: $0)) }
     }
     return model.categories(in: nil).map { category in
-      (title: category.shelfTitle, series: model.seriesGroups(in: nil, category: category))
+      (
+        title: category.shelfTitle, detail: source,
+        series: model.seriesGroups(in: nil, category: category)
+      )
     }
   }
 }
@@ -90,11 +100,11 @@ private struct FeatureBanner: View {
 
       VStack(alignment: .leading, spacing: 7) {
         Text(eyebrow(progress))
-          .font(.caption2.weight(.bold))
+          .font(.system(size: 11, weight: .heavy))
           .tracking(1.3)
-          .foregroundStyle(.white.opacity(0.7))
+          .foregroundStyle(ReaderTheme.accent)
         Text(headline)
-          .font(.system(size: 26, weight: .bold, design: .rounded))
+          .font(.system(size: 28, weight: .bold))
           .foregroundStyle(.white)
           .lineLimit(1)
         if let publication, series?.volumes.count ?? 0 > 1 || publication.series != nil {
@@ -113,7 +123,7 @@ private struct FeatureBanner: View {
 
         if let progress, progress.isStarted, !progress.isCompleted {
           HStack(spacing: 10) {
-            ReadingProgressBar(fraction: progress.fraction, tint: .white)
+            ReadingProgressBar(fraction: progress.fraction, track: .white.opacity(0.2))
               .frame(width: 200)
             Text("\(progress.label) · \(progress.percent)%")
               .font(.caption.monospacedDigit())
@@ -129,17 +139,14 @@ private struct FeatureBanner: View {
               Label(
                 progress?.resumePage == nil ? "Read Now" : "Continue", systemImage: "play.fill")
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.white)
-            .foregroundStyle(.black)
+            .buttonStyle(.accent)
           }
 
           if let series {
             NavigationLink(value: LibraryRoute.series(series.key)) {
               Label(series.volumes.count > 1 ? "Series" : "Details", systemImage: "info.circle")
             }
-            .buttonStyle(.bordered)
-            .tint(.white)
+            .buttonStyle(.chrome)
           }
         }
         .padding(.top, 4)
@@ -147,12 +154,11 @@ private struct FeatureBanner: View {
 
       Spacer(minLength: 0)
     }
-    .padding(18)
+    .padding(22)
     .frame(maxWidth: .infinity, alignment: .leading)
     // A background cannot change the card's size, however large the art is.
     .background { backdrop }
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .shadow(color: posterColor.opacity(0.18), radius: 14, y: 6)
+    .clipShape(RoundedRectangle(cornerRadius: 4))
     .accessibilityElement(children: .contain)
     .task(id: "\(publication?.id ?? "")|\(series?.id.id ?? "")|\(model.coverGeneration)") {
       if let publication {
@@ -188,7 +194,7 @@ private struct FeatureBanner: View {
   private var backdrop: some View {
     ZStack {
       LinearGradient(
-        colors: [posterColor.opacity(0.9), .black.opacity(0.9)],
+        colors: [posterColor.opacity(0.5), Color(white: 0.08)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       )
@@ -200,7 +206,7 @@ private struct FeatureBanner: View {
           .opacity(0.5)
       }
       LinearGradient(
-        colors: [.black.opacity(0.55), .black.opacity(0.2)],
+        colors: [.black.opacity(0.7), .black.opacity(0.25)],
         startPoint: .leading,
         endPoint: .trailing
       )
@@ -236,12 +242,13 @@ private struct FeatureBanner: View {
 private struct PublicationShelf: View {
   @ObservedObject var model: ApplicationModel
   let title: String
+  var detail: String?
   let publications: [Publication]
   /// Opens the reader on click rather than the publication's page.
   var opensReader = false
 
   var body: some View {
-    ShelfContainer(title: title, count: publications.count) {
+    ShelfContainer(title: title, detail: detail) {
       ForEach(publications) { publication in
         Group {
           if opensReader {
@@ -267,10 +274,11 @@ private struct PublicationShelf: View {
 private struct SeriesShelf: View {
   @ObservedObject var model: ApplicationModel
   let title: String
+  var detail: String?
   let series: [SeriesGroup]
 
   var body: some View {
-    ShelfContainer(title: title, count: series.count) {
+    ShelfContainer(title: title, detail: detail) {
       ForEach(series) { group in
         NavigationLink(value: LibraryRoute.series(group.key)) {
           SeriesCard(model: model, series: group)
@@ -282,20 +290,39 @@ private struct SeriesShelf: View {
   }
 }
 
+/// A row of cards under a heading, paged with the arrows at its end.
 private struct ShelfContainer<Content: View>: View {
   let title: String
-  let count: Int
+  var detail: String?
   @ViewBuilder let content: Content
   @State private var tallestCard: CGFloat = 0
+  @State private var position = ScrollPosition(edge: .leading)
+  @State private var scroll = ShelfScroll()
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack(alignment: .firstTextBaseline) {
-        Text(title).font(.title2.weight(.semibold))
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(alignment: .center) {
+        SectionHeading(title: title, detail: detail)
         Spacer()
-        Text("\(count)")
-          .font(.subheadline.monospacedDigit())
-          .foregroundStyle(.secondary)
+        if scroll.overflows {
+          HStack(spacing: 2) {
+            Button {
+              page(by: -1)
+            } label: {
+              Image(systemName: "chevron.left")
+            }
+            .disabled(scroll.atStart)
+            .help("Previous")
+            Button {
+              page(by: 1)
+            } label: {
+              Image(systemName: "chevron.right")
+            }
+            .disabled(scroll.atEnd)
+            .help("Next")
+          }
+          .buttonStyle(.chromeIcon(size: 26))
+        }
       }
       ScrollView(.horizontal) {
         LazyHStack(alignment: .top, spacing: 18) {
@@ -310,12 +337,45 @@ private struct ShelfContainer<Content: View>: View {
           }
         }
         .frame(minHeight: tallestCard, alignment: .top)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
       }
-      .scrollIndicators(.hidden)
+      .scrollIndicators(.never)
+      .scrollPosition($position)
+      .onScrollGeometryChange(for: ShelfScroll.self) { geometry in
+        ShelfScroll(
+          offset: geometry.contentOffset.x + geometry.contentInsets.leading,
+          visible: geometry.containerSize.width,
+          content: geometry.contentSize.width + geometry.contentInsets.leading
+            + geometry.contentInsets.trailing)
+      } action: { _, new in
+        scroll = new
+      }
       .shelfBleed()
     }
   }
+
+  /// Moves a shelf's width less a card, so the last card seen stays in view.
+  private func page(by direction: CGFloat) {
+    let step = max(scroll.visible - 2 * ReaderTheme.contentPadding - 150, 150)
+    let target = min(max(scroll.offset + direction * step, 0), scroll.maxOffset)
+    withAnimation(.easeInOut(duration: 0.35)) {
+      position.scrollTo(x: target - scrollInsetLeading)
+    }
+  }
+
+  private var scrollInsetLeading: CGFloat { ReaderTheme.contentPadding }
+}
+
+/// How far a shelf is scrolled, measured from its first card.
+private struct ShelfScroll: Equatable {
+  var offset: CGFloat = 0
+  var visible: CGFloat = 0
+  var content: CGFloat = 0
+
+  var maxOffset: CGFloat { max(content - visible, 0) }
+  var overflows: Bool { maxOffset > 1 }
+  var atStart: Bool { offset <= 1 }
+  var atEnd: Bool { offset >= maxOffset - 1 }
 }
 
 // MARK: - Browse
@@ -402,42 +462,49 @@ struct BrowseView: View {
 
   private func header(seriesCount: Int, volumeCount: Int) -> some View {
     let categories = model.categories(in: library)
-    return VStack(alignment: .leading, spacing: 14) {
-      VStack(alignment: .leading, spacing: 5) {
-        Text(library ?? "All Series")
-          .font(.largeTitle.weight(.semibold))
+    return VStack(alignment: .leading, spacing: 16) {
+      HStack(alignment: .firstTextBaseline, spacing: 14) {
+        Text(library ?? "All Series").pageTitleStyle()
         Text("\(seriesCount.formatted()) series · \(volumeCount.formatted()) volumes")
-          .foregroundStyle(.secondary)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(ReaderTheme.secondaryText)
       }
-      HStack(spacing: 12) {
+      HStack(alignment: .center, spacing: 28) {
+        TextTabs(
+          options: BrowseArrangement.allCases, selection: $arrangement, title: \.title)
         if categories.count > 1 {
-          Picker("Category", selection: $category) {
-            Text("All").tag(PublicationCategory?.none)
-            ForEach(categories, id: \.self) { category in
-              Text(category.title).tag(Optional(category))
-            }
-          }
-          .pickerStyle(.segmented)
-          .labelsHidden()
-          .fixedSize()
+          Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 16)
+          TextTabs(
+            options: [nil] + categories.map(Optional.some), selection: $category,
+            title: { $0?.title ?? "All" })
         }
         Spacer()
-        Picker("Show", selection: $arrangement) {
-          ForEach(BrowseArrangement.allCases) { option in
-            Text(option.title).tag(option)
-          }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
         if arrangement == .series {
-          Picker("Sort By", selection: $sort) {
-            ForEach(SeriesSort.allCases) { option in
-              Text(option.title).tag(option)
+          Menu {
+            Picker("Sort By", selection: $sort) {
+              ForEach(SeriesSort.allCases) { option in
+                Text(option.title).tag(option)
+              }
             }
+            .pickerStyle(.inline)
+          } label: {
+            HStack(spacing: 5) {
+              Text("Sort:").foregroundStyle(ReaderTheme.secondaryText)
+              Text(sort.title).foregroundStyle(.white)
+              Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(ReaderTheme.secondaryText)
+            }
+            .font(.system(size: 13, weight: .semibold))
           }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
           .fixedSize()
         }
+      }
+      .padding(.bottom, 6)
+      .overlay(alignment: .bottom) {
+        Rectangle().fill(.white.opacity(0.08)).frame(height: 1)
       }
     }
   }
@@ -474,11 +541,11 @@ struct SearchResultsView: View {
     let results = model.series(matching: query, in: library)
     ScrollView {
       VStack(alignment: .leading, spacing: 20) {
-        VStack(alignment: .leading, spacing: 5) {
-          Text("Results for “\(query)”")
-            .font(.largeTitle.weight(.semibold))
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+          Text("Results for “\(query)”").pageTitleStyle()
           Text(scopeDescription(count: results.count))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(ReaderTheme.secondaryText)
         }
         SeriesGrid(model: model, series: results, showsLibrary: library == nil)
       }
@@ -573,10 +640,12 @@ private struct CollectionCard: View {
       .padding(18)
     }
     .frame(height: 210)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .shadow(color: .black.opacity(hovering ? 0.28 : 0.14), radius: hovering ? 18 : 8, y: 7)
-    .scaleEffect(hovering ? 1.015 : 1)
-    .animation(.easeOut(duration: 0.16), value: hovering)
+    .clipShape(RoundedRectangle(cornerRadius: 4))
+    .overlay {
+      RoundedRectangle(cornerRadius: 4)
+        .strokeBorder(ReaderTheme.accent, lineWidth: hovering ? 3 : 0)
+    }
+    .animation(.easeOut(duration: 0.12), value: hovering)
     .onHover { hovering = $0 }
   }
 }
@@ -609,13 +678,9 @@ struct PublicationGridView: View {
   private var content: some View {
     LazyVStack(alignment: .leading, spacing: 18) {
       if showsHeader {
-        HStack {
-          Text(title).font(.title2.weight(.semibold))
-          Spacer()
-          Text(publications.count == 1 ? "1 title" : "\(publications.count) titles")
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
+        SectionHeading(
+          title: title,
+          detail: publications.count == 1 ? "1 title" : "\(publications.count) titles")
       }
       LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
         ForEach(publications) { publication in
@@ -642,9 +707,10 @@ struct SeriesCard: View {
     let detail = model.detail(for: series)
     let progress = model.progress(for: series)
     let downloaded = model.downloadedCount(in: series)
-    VStack(alignment: .leading, spacing: 7) {
+    VStack(alignment: .leading, spacing: 3) {
       SeriesCoverView(model: model, series: series)
         .aspectRatio(ReaderTheme.coverRatio, contentMode: .fit)
+        .hoverOutline(hovering)
         .overlay(alignment: .topLeading) {
           HStack(spacing: 4) {
             if downloaded > 0 {
@@ -661,41 +727,33 @@ struct SeriesCard: View {
             if progress.completedCount == progress.volumeCount, progress.volumeCount > 0 {
               CoverBadge(systemImage: "checkmark", label: "All read", tint: .green)
             } else if series.volumes.count > 1 {
-              CoverBadge(text: "\(series.volumes.count)", label: "\(series.volumes.count) volumes")
+              CoverBadge(
+                text: "\(series.volumes.count)", label: "\(series.volumes.count) volumes",
+                tint: ReaderTheme.accent)
             }
           }
           .padding(7)
         }
         .overlay(alignment: .bottom) {
           if progress.fraction > 0, progress.fraction < 1 {
-            ReadingProgressBar(fraction: progress.fraction, tint: .white)
-              .padding(8)
+            ReadingProgressBar(fraction: progress.fraction)
           }
         }
-      if showsLibrary {
-        Text(eyebrow)
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
-          .textCase(.uppercase)
-          .lineLimit(1)
-      }
+        .padding(.bottom, 5)
       Text(model.displayTitle(for: series))
-        .font(.headline)
-        .lineLimit(2)
+        .cardTitleStyle()
       if let detail, detail.isRetitled {
         Text(detail.localName)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+          .cardSubtitleStyle()
       }
       Text(subtitle(progress))
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
+        .cardSubtitleStyle()
+      if showsLibrary, !eyebrow.isEmpty {
+        Text(eyebrow)
+          .cardDetailStyle()
+      }
     }
     .contentShape(Rectangle())
-    .scaleEffect(hovering ? 1.025 : 1)
-    .animation(.easeOut(duration: 0.15), value: hovering)
     .onHover { hovering = $0 }
     .accessibilityElement(children: .combine)
   }
@@ -721,9 +779,10 @@ struct PublicationCard: View {
 
   var body: some View {
     let progress = model.progress(for: publication)
-    VStack(alignment: .leading, spacing: 7) {
+    VStack(alignment: .leading, spacing: 3) {
       CoverImageView(model: model, publication: publication)
         .aspectRatio(ReaderTheme.coverRatio, contentMode: .fit)
+        .hoverOutline(hovering)
         .overlay(alignment: .topLeading) {
           if model.isDownloaded(publication) {
             DownloadedBadge().padding(7)
@@ -736,26 +795,21 @@ struct PublicationCard: View {
         }
         .overlay(alignment: .bottom) {
           if progress.resumePage != nil {
-            ReadingProgressBar(fraction: progress.fraction, tint: .white)
-              .padding(8)
+            ReadingProgressBar(fraction: progress.fraction)
           }
         }
+        .padding(.bottom, 5)
       Text(publication.title)
-        .font(.headline)
-        .lineLimit(2)
+        .cardTitleStyle()
       Text(subtitle)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
+        .cardSubtitleStyle()
       if progress.resumePage != nil {
         Text(progress.label)
-          .font(.caption.monospacedDigit())
-          .foregroundStyle(.tertiary)
+          .monospacedDigit()
+          .cardDetailStyle()
       }
     }
     .contentShape(Rectangle())
-    .scaleEffect(hovering ? 1.025 : 1)
-    .animation(.easeOut(duration: 0.15), value: hovering)
     .onHover { hovering = $0 }
     .accessibilityElement(children: .combine)
   }
@@ -864,11 +918,11 @@ struct CoverBadge: View {
         Text(text).monospacedDigit()
       }
     }
-    .font(.caption2.weight(.bold))
-    .foregroundStyle(.white)
-    .padding(.horizontal, 6)
+    .font(.system(size: 11, weight: .heavy))
+    .foregroundStyle(tint == ReaderTheme.accent ? .black.opacity(0.85) : .white)
+    .padding(.horizontal, 5)
     .frame(minWidth: 20, minHeight: 20)
-    .background(tint, in: Capsule())
+    .background(tint, in: RoundedRectangle(cornerRadius: 3))
     .help(label)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(label)
@@ -884,23 +938,25 @@ struct DownloadedBadge: View {
     if let count, let total, count < total {
       CoverBadge(
         systemImage: "arrow.down", text: "\(count)",
-        label: "\(count) of \(total) volumes downloaded", tint: .accentColor)
+        label: "\(count) of \(total) volumes downloaded")
     } else {
-      CoverBadge(systemImage: "arrow.down", label: "Downloaded", tint: .accentColor)
+      CoverBadge(systemImage: "arrow.down", label: "Downloaded")
     }
   }
 }
 
-/// A slim bar showing how much of something has been read.
+/// A slim bar showing how much of something has been read, gold on a dark
+/// track as it runs along the foot of a Plex poster.
 struct ReadingProgressBar: View {
   let fraction: Double
-  var tint: Color = .accentColor
+  var tint: Color = ReaderTheme.accent
+  var track: Color = .black.opacity(0.6)
 
   var body: some View {
     GeometryReader { proxy in
       ZStack(alignment: .leading) {
-        Capsule().fill(tint.opacity(0.25))
-        Capsule()
+        Rectangle().fill(track)
+        Rectangle()
           .fill(tint)
           .frame(width: max(fraction > 0 ? 4 : 0, proxy.size.width * min(max(fraction, 0), 1)))
       }
@@ -958,8 +1014,65 @@ struct CoverArtwork: View {
         PosterPlaceholder(title: title, category: category)
       }
     }
-    .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.coverRadius, style: .continuous))
-    .shadow(color: .black.opacity(0.2), radius: 9, y: 5)
+    .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.coverRadius))
+  }
+}
+
+extension View {
+  /// Plex's hover: a gold frame around the poster rather than a lift.
+  func hoverOutline(_ hovering: Bool) -> some View {
+    overlay {
+      RoundedRectangle(cornerRadius: ReaderTheme.coverRadius)
+        .strokeBorder(ReaderTheme.accent, lineWidth: hovering ? 3 : 0)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+    .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.coverRadius))
+  }
+
+  /// A card's name: bold white, up to two lines.
+  func cardTitleStyle() -> some View {
+    font(.system(size: 13, weight: .bold)).foregroundStyle(.white).lineLimit(2)
+  }
+
+  /// The line under a card's name.
+  func cardSubtitleStyle() -> some View {
+    font(.system(size: 12, weight: .medium)).foregroundStyle(ReaderTheme.secondaryText)
+      .lineLimit(1)
+  }
+
+  /// A card's last, quietest line.
+  func cardDetailStyle() -> some View {
+    font(.system(size: 12)).foregroundStyle(ReaderTheme.tertiaryText).lineLimit(1)
+  }
+}
+
+/// Plex's tabs: words in a row, the chosen one white over a gold rule.
+struct TextTabs<Option: Hashable>: View {
+  let options: [Option]
+  @Binding var selection: Option
+  let title: (Option) -> String
+
+  var body: some View {
+    HStack(spacing: 22) {
+      ForEach(options, id: \.self) { option in
+        let chosen = option == selection
+        Button {
+          selection = option
+        } label: {
+          Text(title(option).uppercased())
+            .font(.system(size: 12, weight: .heavy))
+            .tracking(0.7)
+            .foregroundStyle(chosen ? .white : ReaderTheme.secondaryText)
+            .padding(.vertical, 8)
+            .overlay(alignment: .bottom) {
+              Rectangle().fill(chosen ? ReaderTheme.accent : .clear).frame(height: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+      }
+    }
   }
 }
 
@@ -970,7 +1083,7 @@ private struct PosterPlaceholder: View {
   var body: some View {
     // The gradient alone sizes the poster, so it fits any frame it is given.
     LinearGradient(
-      colors: [Color.posterColor(for: title), .black.opacity(0.88)],
+      colors: [Color.posterColor(for: title), Color(white: 0.07)],
       startPoint: .topLeading,
       endPoint: .bottomTrailing
     )
@@ -986,12 +1099,14 @@ private struct PosterPlaceholder: View {
     .overlay {
       VStack(alignment: .leading) {
         Text(category == .manga ? "MANGA" : "NINEVEH")
-          .font(.caption2.weight(.bold))
+          .font(.system(size: 10, weight: .heavy))
           .tracking(1.4)
+          .lineLimit(1)
+          .minimumScaleFactor(0.6)
           .foregroundStyle(.white.opacity(0.65))
         Spacer()
         Text(title)
-          .font(.system(size: 20, weight: .bold, design: .rounded))
+          .font(.system(size: 20, weight: .heavy))
           .foregroundStyle(.white)
           .lineLimit(4)
           .minimumScaleFactor(0.5)

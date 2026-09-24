@@ -17,11 +17,11 @@ struct NinevehReaderApp: App {
           Task { await model.addLocalFiles([url], kind: .external) }
         }
     }
+    // The library's top bar is the toolbar, with the window's buttons in it.
+    .windowToolbarStyle(.unified(showsTitle: false))
     .defaultSize(width: 1180, height: 780)
     .windowResizability(.contentMinSize)
     .commands {
-      SidebarCommands()
-      ToolbarCommands()
       LibraryCommands(model: model)
     }
   }

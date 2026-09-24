@@ -36,6 +36,9 @@ public struct NinevehReaderRootView: View {
           .id(destination.id)
       }
     }
+    // Plex's look is dark only, and gold where the system would be blue.
+    .preferredColorScheme(.dark)
+    .tint(ReaderTheme.accent)
     // The reader takes the window's title bar itself; see ReaderWindowChrome.
     .task {
       if model.phase == .restoring { await model.restore() }
@@ -62,16 +65,11 @@ private struct SignInView: View {
     ZStack {
       QuietBackground()
       VStack(spacing: 24) {
-        Image(systemName: "books.vertical.fill")
-          .font(.system(size: 40, weight: .medium))
-          .foregroundStyle(.tint)
-          .accessibilityHidden(true)
-
-        VStack(spacing: 7) {
-          Text("Nineveh Reader")
-            .font(.largeTitle.weight(.semibold))
+        VStack(spacing: 10) {
+          Wordmark(size: 40)
           Text("Your library, wherever you left off.")
-            .foregroundStyle(.secondary)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(ReaderTheme.secondaryText)
         }
 
         VStack(spacing: 14) {
@@ -91,8 +89,7 @@ private struct SignInView: View {
               Text("Sign In").frame(maxWidth: .infinity)
             }
           }
-          .buttonStyle(.borderedProminent)
-          .controlSize(.large)
+          .buttonStyle(.accent)
           .disabled(model.isRefreshing || username.isEmpty || password.isEmpty)
 
           Button("Browse On My Mac") {

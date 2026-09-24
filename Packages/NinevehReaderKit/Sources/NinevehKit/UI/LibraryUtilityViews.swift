@@ -6,36 +6,39 @@ struct DownloadsView: View {
   @ObservedObject var model: ApplicationModel
 
   var body: some View {
-    List {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 30) {
+        Text("Downloads").pageTitleStyle()
+        ForEach(groupedDownloads, id: \.name) { group in
+          VStack(alignment: .leading, spacing: 10) {
+            SectionHeading(
+              title: group.name,
+              detail:
+                "\(group.records.filter { $0.state == .completed }.count) of \(group.records.count)"
+            )
+            VStack(spacing: 1) {
+              ForEach(group.records) { record in
+                DownloadRow(
+                  record: record,
+                  retry: { Task { await model.retryDownload(record) } },
+                  reveal: revealAction(for: record),
+                  remove: { Task { await model.removeDownload(record) } }
+                )
+              }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+          }
+        }
+      }
+      .padding(ReaderTheme.contentPadding)
+    }
+    .overlay {
       if model.shownDownloads.isEmpty {
         ContentUnavailableView(
           "No Downloads",
           systemImage: "arrow.down.circle",
           description: Text("Download a publication or an entire series for offline reading.")
         )
-        .listRowBackground(Color.clear)
-      } else {
-        ForEach(groupedDownloads, id: \.name) { group in
-          Section {
-            ForEach(group.records) { record in
-              DownloadRow(
-                record: record,
-                retry: { Task { await model.retryDownload(record) } },
-                reveal: revealAction(for: record),
-                remove: { Task { await model.removeDownload(record) } }
-              )
-            }
-          } header: {
-            HStack {
-              Text(group.name)
-              Spacer()
-              Text(
-                "\(group.records.filter { $0.state == .completed }.count)/\(group.records.count)"
-              )
-              .monospacedDigit()
-            }
-          }
-        }
       }
     }
     .navigationTitle("Downloads")
@@ -69,6 +72,7 @@ private struct DownloadRow: View {
   let retry: () -> Void
   let reveal: (() -> Void)?
   let remove: () -> Void
+  @State private var hovering = false
 
   var body: some View {
     HStack(spacing: 14) {
@@ -77,12 +81,12 @@ private struct DownloadRow: View {
         .foregroundStyle(iconColor)
         .frame(width: 26)
       VStack(alignment: .leading, spacing: 4) {
-        Text(record.title).font(.headline)
+        Text(record.title).font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
         switch record.state {
         case .queued:
           Text("Queued").foregroundStyle(.secondary)
         case .downloading:
-          ProgressView(value: record.progress)
+          ReadingProgressBar(fraction: record.progress, track: .white.opacity(0.15))
             .frame(maxWidth: 220)
         case .completed:
           Text(record.byteCount, format: .byteCount(style: .file))
@@ -94,23 +98,26 @@ private struct DownloadRow: View {
       }
       Spacer()
       if record.state == .failed {
-        Button("Retry", action: retry)
+        Button("Retry", action: retry).buttonStyle(.accent)
       }
       if let reveal {
         Button(action: reveal) {
           Image(systemName: "folder")
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.chromeIcon)
         .help("Show in Finder")
         .accessibilityLabel("Show \(record.title) in Finder")
       }
       Button(role: .destructive, action: remove) {
         Image(systemName: "trash")
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.chromeIcon)
       .accessibilityLabel("Remove \(record.title)")
     }
-    .padding(.vertical, 5)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
+    .background(.white.opacity(hovering ? 0.08 : 0.045))
+    .onHover { hovering = $0 }
   }
 
   private var icon: String {
@@ -124,9 +131,9 @@ private struct DownloadRow: View {
 
   private var iconColor: Color {
     switch record.state {
-    case .completed: .green
+    case .completed: ReaderTheme.accent
     case .failed: .red
-    default: .accentColor
+    default: ReaderTheme.secondaryText
     }
   }
 }
@@ -146,14 +153,16 @@ struct LocalLibraryView: View {
       VStack(alignment: .leading, spacing: 26) {
         HStack {
           VStack(alignment: .leading, spacing: 5) {
-            Text("On My Mac").font(.largeTitle.weight(.semibold))
+            Text("On My Mac").pageTitleStyle()
             Text("Imported books and files kept in their original location.")
-              .foregroundStyle(.secondary)
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(ReaderTheme.secondaryText)
           }
           Spacer()
           Button("Open File…") { showingExternalPicker = true }
+            .buttonStyle(.chrome)
           Button("Import…") { showingImporter = true }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.accent)
         }
 
         if model.localBooks.isEmpty {
@@ -163,13 +172,13 @@ struct LocalLibraryView: View {
             description: Text("Import a copy or open a file in place.")
           )
           .frame(maxWidth: .infinity, minHeight: 300)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+          .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 4))
         } else {
           ForEach(LocalBookKind.allCases, id: \.rawValue) { kind in
             let books = model.localBooks.filter { $0.kind == kind }
             if !books.isEmpty {
-              Text(kind == .imported ? "Imported" : "External Files")
-                .font(.title2.weight(.semibold))
+              SectionHeading(
+                title: kind == .imported ? "Imported" : "External Files", detail: "On My Mac")
               LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
                 ForEach(books) { book in
                   LocalBookCard(model: model, book: book)
@@ -211,9 +220,10 @@ private struct LocalBookCard: View {
   @ObservedObject var model: ApplicationModel
   let book: LocalBook
   @State private var coverData: Data?
+  @State private var hovering = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 4) {
       Button {
         Task { await model.beginReading(book) }
       } label: {
@@ -229,18 +239,18 @@ private struct LocalBookCard: View {
           }
         }
         .aspectRatio(ReaderTheme.coverRatio, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.coverRadius))
-        .shadow(color: .black.opacity(0.14), radius: 8, y: 4)
+        .hoverOutline(hovering)
       }
       .buttonStyle(.plain)
-      Text(book.title).font(.headline).lineLimit(2)
+      .onHover { hovering = $0 }
+      .padding(.bottom, 4)
+      Text(book.title).cardTitleStyle()
       HStack {
         Label(
           book.kind == .imported ? "Imported" : "External",
           systemImage: book.kind == .imported ? "square.and.arrow.down" : "link"
         )
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .cardSubtitleStyle()
         Spacer()
         Menu {
           LocalBookActions(model: model, book: book)
@@ -341,6 +351,7 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
+    .scrollContentBackground(.hidden)
     .navigationTitle("Settings")
     .padding(.horizontal, ReaderTheme.contentPadding)
   }

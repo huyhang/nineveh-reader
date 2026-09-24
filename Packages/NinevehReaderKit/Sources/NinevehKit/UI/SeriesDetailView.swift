@@ -23,6 +23,7 @@ private struct SeriesPage: View {
   let series: SeriesGroup
   @State private var coverData: Data?
   @State private var showsFullDescription = false
+  @Environment(\.openURL) private var openURL
 
   private let columns = [GridItem(.adaptive(minimum: 330, maximum: 480), spacing: 18)]
 
@@ -81,13 +82,13 @@ private struct SeriesPage: View {
 
       VStack(alignment: .leading, spacing: 13) {
         Text(eyebrow)
-          .font(.caption.weight(.semibold))
+          .font(.system(size: 12, weight: .heavy))
           .tracking(1.1)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(ReaderTheme.secondaryText)
           .textCase(.uppercase)
 
         Text(model.displayTitle(for: series))
-          .font(.system(size: 34, weight: .bold))
+          .font(.system(size: 34, weight: .heavy))
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
 
@@ -111,7 +112,7 @@ private struct SeriesPage: View {
                   .font(.caption.weight(.semibold))
                   .padding(.horizontal, 9)
                   .padding(.vertical, 4)
-                  .background(.tint.opacity(0.14), in: Capsule())
+                  .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 3))
                   .foregroundStyle(.tint)
               }
             }
@@ -185,19 +186,18 @@ private struct SeriesPage: View {
           Task { await model.beginReading(next.publication, fromStart: next.fromStart) }
         } label: {
           Label(next.title, systemImage: "play.fill")
-            .padding(.horizontal, 4)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
+        .buttonStyle(.accent)
       }
 
       downloadAllButton
 
       if let webURL {
-        Link(destination: webURL) {
+        Button {
+          openURL(webURL)
+        } label: {
           Label("Open in Browser", systemImage: "safari")
         }
-        .controlSize(.large)
         .help("Open this series in Nineveh's web client")
       }
 
@@ -209,11 +209,11 @@ private struct SeriesPage: View {
             model.isRefreshingMetadata ? "Refreshing…" : "Refresh Metadata",
             systemImage: "arrow.clockwise")
         }
-        .controlSize(.large)
         .disabled(model.isRefreshingMetadata)
         .help("Fetch this series' details and cover from Nineveh again")
       }
     }
+    .buttonStyle(.chrome)
   }
 
   @ViewBuilder
@@ -240,7 +240,6 @@ private struct SeriesPage: View {
             ? "Update Downloads" : series.volumes.count == 1 ? "Download" : "Download All",
           systemImage: needsUpdate ? "arrow.triangle.2.circlepath" : "arrow.down.circle")
       }
-      .controlSize(.large)
     }
   }
 
@@ -291,7 +290,7 @@ private struct SeriesPage: View {
               .font(.caption)
               .padding(.horizontal, 9)
               .padding(.vertical, 4)
-              .background(.quaternary, in: Capsule())
+              .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 3))
           }
         }
         .frame(maxWidth: 760, alignment: .leading)
@@ -301,7 +300,7 @@ private struct SeriesPage: View {
     }
     .padding(22)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 4))
   }
 
   private func facts(_ metadata: SeriesMetadata) -> [(label: String, value: String)] {
@@ -342,15 +341,7 @@ private struct SeriesPage: View {
 
   private var volumes: some View {
     VStack(alignment: .leading, spacing: 16) {
-      VStack(alignment: .leading, spacing: 3) {
-        Text("On this server")
-          .font(.caption.weight(.semibold))
-          .tracking(1.1)
-          .foregroundStyle(.secondary)
-          .textCase(.uppercase)
-        Text("Volumes and issues")
-          .font(.title2.weight(.semibold))
-      }
+      SectionHeading(title: "Volumes and Issues", detail: series.library)
       LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
         ForEach(series.volumes) { volume in
           VolumeCard(model: model, publication: volume)
@@ -388,10 +379,12 @@ private struct VolumeCard: View {
 
       VStack(alignment: .leading, spacing: 7) {
         Text(heading)
-          .font(.caption.weight(.medium))
-          .foregroundStyle(.secondary)
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(ReaderTheme.secondaryText)
+          .textCase(.uppercase)
         Text(publication.title)
-          .font(.headline)
+          .font(.system(size: 14, weight: .bold))
+          .foregroundStyle(.white)
           .lineLimit(2)
 
         VStack(alignment: .leading, spacing: 4) {
@@ -414,18 +407,19 @@ private struct VolumeCard: View {
             Button("Resume") {
               Task { await model.beginReading(publication) }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.accent)
             .help("Resume at page \(page)")
             .fixedSize()
             Button("Start over") {
               Task { await model.beginReading(publication, fromStart: true) }
             }
+            .buttonStyle(.chrome)
             .fixedSize()
           } else {
             Button("Read from start") {
               Task { await model.beginReading(publication, fromStart: true) }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.accent)
           }
           Spacer(minLength: 0)
           Menu {
@@ -446,14 +440,14 @@ private struct VolumeCard: View {
     .padding(14)
     .frame(minHeight: 166)
     .background(
-      .background.secondary.opacity(hovering ? 0.95 : 0.7),
-      in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+      .white.opacity(hovering ? 0.08 : 0.045), in: RoundedRectangle(cornerRadius: 4)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .strokeBorder(.separator.opacity(0.6))
+      RoundedRectangle(cornerRadius: 4)
+        .strokeBorder(ReaderTheme.accent.opacity(hovering ? 0.8 : 0), lineWidth: 2)
     )
-    .contentShape(RoundedRectangle(cornerRadius: 14))
+    .animation(.easeOut(duration: 0.12), value: hovering)
+    .contentShape(RoundedRectangle(cornerRadius: 4))
     .onTapGesture {
       Task { await model.beginReading(publication, fromStart: progress.isCompleted) }
     }
@@ -498,7 +492,7 @@ struct PublicationDetailView: View {
               .buttonStyle(.link)
             }
             Text(publication.title)
-              .font(.system(size: 32, weight: .bold))
+              .font(.system(size: 32, weight: .heavy))
               .textSelection(.enabled)
             let creators = model.creators(of: publication)
             if !creators.isEmpty {
@@ -534,8 +528,7 @@ struct PublicationDetailView: View {
 
         if let series, series.volumes.count > 1 {
           VStack(alignment: .leading, spacing: 14) {
-            Text("More in This Series")
-              .font(.title2.weight(.semibold))
+            SectionHeading(title: "More in This Series", detail: model.displayTitle(for: series))
             ScrollView(.horizontal) {
               LazyHStack(alignment: .top, spacing: 18) {
                 ForEach(series.volumes) { volume in
@@ -552,7 +545,7 @@ struct PublicationDetailView: View {
               }
               .padding(.vertical, 8)
             }
-            .scrollIndicators(.hidden)
+            .scrollIndicators(.never)
             .shelfBleed()
           }
         }
@@ -582,7 +575,7 @@ struct PublicationDetailView: View {
         } label: {
           Label("Resume at Page \(page)", systemImage: "play.fill")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.accent)
         Button("Read from Start") {
           Task { await model.beginReading(publication, fromStart: true) }
         }
@@ -592,7 +585,7 @@ struct PublicationDetailView: View {
         } label: {
           Label(progress.isCompleted ? "Read Again" : "Read", systemImage: "play.fill")
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.accent)
       }
 
       downloadButton
@@ -607,7 +600,7 @@ struct PublicationDetailView: View {
       .fixedSize()
       .accessibilityLabel("More actions")
     }
-    .controlSize(.large)
+    .buttonStyle(.chrome)
   }
 
   @ViewBuilder
