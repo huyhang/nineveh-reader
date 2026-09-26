@@ -1,7 +1,7 @@
 import Foundation
 import NinevehCore
 
-public actor NinevehClient: Authenticating, CatalogProviding, ProgressSyncing {
+public actor NinevehClient: Authenticating, CatalogProviding, SeriesCurating, ProgressSyncing {
   private let connection: ServerConnection
   private let credentials: Credentials
   private let transport: any HTTPTransport
@@ -20,7 +20,8 @@ public actor NinevehClient: Authenticating, CatalogProviding, ProgressSyncing {
     self.encoder = JSONEncoder()
   }
 
-  public func authenticate() async throws {
+  @discardableResult
+  public func authenticate() async throws -> Account {
     var discoveryRequest = URLRequest(
       url: connection.baseURL.appending(path: "/opds/v2/authentication.json"))
     discoveryRequest.setValue(
@@ -31,33 +32,38 @@ public actor NinevehClient: Authenticating, CatalogProviding, ProgressSyncing {
     else {
       throw ReaderError.unsupportedAuthentication
     }
-    let request = try makeRequest(path: "/api/v1/auth/me")
-    _ = try await responseData(for: request)
+    return try await account()
+  }
+
+  /// Who the credentials sign in as. An answer this client cannot read still
+  /// means they work, so it counts as an account without administration.
+  public func account() async throws -> Account {
+    let data = try await responseData(for: try makeRequest(path: "/api/v1/auth/me"))
+    return (try? decoder.decode(UserAccountDTO.self, from: data))?.model
+      ?? Account(username: credentials.username)
   }
 
   /// Every publication the account can read, each filed under the library
-  /// and category whose feed lists it.
+  /// and category whose feed lists it, private series under the Private
+  /// Collection's.
   public func catalog() async throws -> CatalogSnapshot {
     let root = try await feed(path: "/opds/v2/catalog.json")
-    // The query value is what the feeds filter on; the title is for people.
-    let libraries = root.navigation.compactMap { link -> LibrarySummary? in
-      guard let name = queryValue("library", in: link.href) ?? link.title else { return nil }
-      return LibrarySummary(name: name, publicationCount: link.properties?.numberOfItems)
-    }
-    guard !libraries.isEmpty else {
+    // The Private Collection is listed beside the libraries, but is not one.
+    let offersPrivateCollection = root.navigation.contains { isPrivateCollection($0.href) }
+    let libraries = librarySummaries(root.navigation.filter { !isPrivateCollection($0.href) })
+    guard !libraries.isEmpty || offersPrivateCollection else {
       return CatalogSnapshot(publications: try await catalogByCategory())
     }
 
     // Shelves load side by side, then land in the order the server listed them.
-    var shelves: [(library: String, category: PublicationCategory)] = []
+    var shelves: [Shelf] = []
     for library in libraries {
-      let navigation = try await feed(
-        path: "/opds/v2/navigation.json", query: [URLQueryItem(name: "library", value: library.name)])
-      for link in navigation.navigation {
-        guard let name = queryValue("category", in: link.href) ?? link.title,
-          let category = PublicationCategory(rawValue: name.lowercased())
-        else { continue }
-        shelves.append((library.name, category))
+      shelves += try await self.shelves(in: library.name, isPrivate: false)
+    }
+    if offersPrivateCollection {
+      let collection = try await feed(path: Self.privateCollectionPath)
+      for library in librarySummaries(collection.navigation) {
+        shelves += try await self.shelves(in: library.name, isPrivate: true)
       }
     }
     let loaded = try await withThrowingTaskGroup(of: (Int, [Publication]).self) { group in
@@ -68,9 +74,14 @@ public actor NinevehClient: Authenticating, CatalogProviding, ProgressSyncing {
             query: [
               URLQueryItem(name: "library", value: shelf.library),
               URLQueryItem(name: "category", value: shelf.category.rawValue),
-            ]
+            ] + Self.collectionQuery(isPrivate: shelf.isPrivate)
           )
-          return (index, values.map { $0.filed(in: shelf.category, library: shelf.library) })
+          return (
+            index,
+            values.map {
+              $0.filed(in: shelf.category, library: shelf.library, isPrivate: shelf.isPrivate)
+            }
+          )
         }
       }
       var results: [(Int, [Publication])] = []
@@ -80,6 +91,44 @@ public actor NinevehClient: Authenticating, CatalogProviding, ProgressSyncing {
     var seen = Set<String>()
     let publications = loaded.filter { seen.insert($0.id).inserted }
     return CatalogSnapshot(publications: publications, libraries: libraries)
+  }
+
+  static let privateCollectionPath = "/opds/v2/private.json"
+
+  private struct Shelf: Sendable {
+    let library: String
+    let category: PublicationCategory
+    let isPrivate: Bool
+  }
+
+  private func librarySummaries(_ links: [OPDSLinkDTO]) -> [LibrarySummary] {
+    // The query value is what the feeds filter on; the title is for people.
+    links.compactMap { link in
+      guard let name = queryValue("library", in: link.href) ?? link.title else { return nil }
+      return LibrarySummary(name: name, publicationCount: link.properties?.numberOfItems)
+    }
+  }
+
+  private func shelves(in library: String, isPrivate: Bool) async throws -> [Shelf] {
+    let navigation = try await feed(
+      path: "/opds/v2/navigation.json",
+      query: [URLQueryItem(name: "library", value: library)]
+        + Self.collectionQuery(isPrivate: isPrivate))
+    return navigation.navigation.compactMap { link in
+      guard let name = queryValue("category", in: link.href) ?? link.title,
+        let category = PublicationCategory(rawValue: name.lowercased())
+      else { return nil }
+      return Shelf(library: library, category: category, isPrivate: isPrivate)
+    }
+  }
+
+  /// The feeds list public series unless asked for the Private Collection's.
+  private static func collectionQuery(isPrivate: Bool) -> [URLQueryItem] {
+    isPrivate ? [URLQueryItem(name: "collection", value: "private")] : []
+  }
+
+  private func isPrivateCollection(_ href: String) -> Bool {
+    resolve(href)?.path == connection.baseURL.appending(path: Self.privateCollectionPath).path
   }
 
   /// A server without library navigation still files everything by category.
@@ -98,20 +147,30 @@ public actor NinevehClient: Authenticating, CatalogProviding, ProgressSyncing {
     return publications
   }
 
-  public func publications(in series: SeriesReference, library: String?) async throws
-    -> [Publication]
-  {
+  public func publications(
+    in series: SeriesReference, library: String?, isPrivate: Bool = false
+  ) async throws -> [Publication] {
     // Feeds filter by the series' name; the library tells two same-named
     // series apart.
     var query = [URLQueryItem(name: "series", value: series.title)]
     if let library { query.append(URLQueryItem(name: "library", value: library)) }
+    query += Self.collectionQuery(isPrivate: isPrivate)
     return try await loadAllPublications(path: "/opds/v2/publications.json", query: query)
       .filter { $0.series?.id == series.id || $0.series?.serverID == nil }
-      .map { $0.filed(in: $0.category, library: library) }
+      .map { $0.filed(in: $0.category, library: library, isPrivate: isPrivate) }
   }
 
   public func seriesDetail(id: String) async throws -> SeriesDetail {
     let request = try makeRequest(path: "/api/v1/series/\(escaped(id))")
+    let data = try await responseData(for: request)
+    return try decoder.decode(SeriesDetailDTO.self, from: data).model
+  }
+
+  public func setPrivate(_ isPrivate: Bool, seriesID: String) async throws -> SeriesDetail {
+    var request = try makeRequest(
+      path: "/api/v1/series/\(escaped(seriesID))/privacy", method: "PUT")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try encoder.encode(SeriesPrivacyDTO(isPrivate: isPrivate))
     let data = try await responseData(for: request)
     return try decoder.decode(SeriesDetailDTO.self, from: data).model
   }
@@ -235,9 +294,7 @@ public actor NinevehClient: Authenticating, CatalogProviding, ProgressSyncing {
     )
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try encoder.encode(
-      ProgressUpdateDTO(
-        page: position.page, mode: position.mode.rawValue, completed: position.completed)
-    )
+      ProgressUpdateDTO(page: position.page, completed: position.completed))
     let data = try await responseData(for: request)
     return (try? decoder.decode(ReadingPositionDTO.self, from: data).model) ?? position
   }
@@ -384,22 +441,30 @@ public actor RemotePageSource: PageProviding {
   }
 }
 
+/// No `mode`: the account's mode is kept for older apps, and a save without
+/// one leaves theirs as it was. This app keeps a mode per series on the device.
 private struct ProgressUpdateDTO: Encodable {
   let page: Int
-  let mode: String
   let completed: Bool
+}
+
+private struct SeriesPrivacyDTO: Encodable {
+  let isPrivate: Bool
+
+  enum CodingKeys: String, CodingKey {
+    case isPrivate = "private"
+  }
 }
 
 private struct ReadingPositionDTO: Decodable {
   let publicationID: String
   let page: Int
-  let mode: ReadingMode
   let completed: Bool
   let updatedAt: String
 
   enum CodingKeys: String, CodingKey {
     case publicationID = "publicationId"
-    case page, mode, completed, updatedAt
+    case page, completed, updatedAt
   }
 
   var model: ReadingPosition {
@@ -410,7 +475,6 @@ private struct ReadingPositionDTO: Decodable {
     return ReadingPosition(
       publicationID: publicationID,
       page: page,
-      mode: mode,
       completed: completed,
       updatedAt: date
     )

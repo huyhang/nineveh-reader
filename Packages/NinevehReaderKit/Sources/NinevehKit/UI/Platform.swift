@@ -27,18 +27,14 @@ extension EnvironmentValues {
   var contentPadding: CGFloat { isNarrow ? 20 : ReaderTheme.contentPadding }
 }
 
-/// A row of buttons. On the Mac it is one line, as it always was; an iPad
-/// window can be narrower than its buttons, so there they wrap.
+/// A row of buttons. A window narrower than its buttons, on a Mac as on an
+/// iPad, wraps them onto another line rather than squeezing their labels.
 struct ActionRow<Content: View>: View {
   var spacing: CGFloat = 10
   @ViewBuilder var content: Content
 
   var body: some View {
-    #if os(macOS)
-      HStack(spacing: spacing) { content }
-    #else
-      FlowLayout(spacing: spacing) { content }
-    #endif
+    FlowLayout(spacing: spacing) { content }
   }
 }
 

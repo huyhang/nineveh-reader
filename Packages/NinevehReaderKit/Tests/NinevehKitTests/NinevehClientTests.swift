@@ -58,11 +58,95 @@ import Testing
   #expect(series.serverID == "series-1")
   #expect(catalog.publications.first?.volume == "1")
   #expect(catalog.publications.first?.authors == ["A. Reader"])
+  #expect(catalog.publications.allSatisfy { !$0.isPrivate })
   let requests = await transport.requests
   #expect(
     requests.allSatisfy {
       $0.value(forHTTPHeaderField: "Authorization") == "Basic cmVhZGVyOnNlY3JldA=="
     })
+  // A root that lists no Private Collection has none to ask for.
+  #expect(!requests.contains { $0.url?.path == "/opds/v2/private.json" })
+}
+
+@Test func filesPrivateSeriesUnderThePrivateCollection() async throws {
+  let transport = RoutingTransport(responses: [
+    "/opds/v2/catalog.json": Data(
+      #"""
+      {
+        "metadata": {"title": "Nineveh"},
+        "navigation": [
+          {"href": "https://reader.example.com/opds/v2/navigation.json?library=Home",
+           "title": "Home", "properties": {"numberOfItems": 1}},
+          {"href": "https://reader.example.com/opds/v2/private.json",
+           "title": "Private Collection", "properties": {"numberOfItems": 2}}
+        ]
+      }
+      """#.utf8),
+    "/opds/v2/navigation.json?library=Home": Data(
+      #"""
+      {"metadata": {"title": "Home"},
+       "navigation": [{"href": "/opds/v2/publications.json?library=Home&category=manga",
+                       "title": "manga"}]}
+      """#.utf8),
+    "/opds/v2/private.json": Data(
+      #"""
+      {"metadata": {"title": "Private Collection"},
+       "navigation": [
+         {"href": "https://reader.example.com/opds/v2/navigation.json?collection=private&library=Home",
+          "title": "Home", "properties": {"numberOfItems": 1}},
+         {"href": "https://reader.example.com/opds/v2/navigation.json?collection=private&library=Vault",
+          "title": "Vault", "properties": {"numberOfItems": 1}}
+       ]}
+      """#.utf8),
+    "/opds/v2/navigation.json?library=Home&collection=private": Data(
+      #"""
+      {"metadata": {"title": "Home"},
+       "navigation": [{"href": "/opds/v2/publications.json?collection=private&library=Home&category=comics",
+                       "title": "comics"}]}
+      """#.utf8),
+    "/opds/v2/navigation.json?library=Vault&collection=private": Data(
+      #"""
+      {"metadata": {"title": "Vault"},
+       "navigation": [{"href": "/opds/v2/publications.json?collection=private&library=Vault&category=manga",
+                       "title": "manga"}]}
+      """#.utf8),
+    "/opds/v2/publications.json?library=Home&category=manga": feed(publications: [
+      publication(id: "public-1", title: "In the Open")
+    ]),
+    "/opds/v2/publications.json?library=Home&category=comics&collection=private": feed(
+      publications: [publication(id: "private-1", title: "Behind Glass")],
+      next: "/opds/v2/publications.json?collection=private&library=Home&category=comics&page=2"),
+    "/opds/v2/publications.json?collection=private&library=Home&category=comics&page=2": feed(
+      publications: [publication(id: "private-2", title: "Behind Glass Again")]),
+    "/opds/v2/publications.json?library=Vault&category=manga&collection=private": feed(
+      publications: [publication(id: "private-3", title: "Locked Away")]),
+  ])
+
+  let catalog = try await makeClient(transport: transport).catalog()
+
+  // The collection's libraries are where its series are filed, not libraries of their own.
+  #expect(catalog.libraries.map(\.name) == ["Home"])
+  #expect(catalog.publications.map(\.id) == ["public-1", "private-1", "private-2", "private-3"])
+  #expect(catalog.publications.map(\.isPrivate) == [false, true, true, true])
+  #expect(catalog.publications.map(\.library) == ["Home", "Home", "Home", "Vault"])
+  #expect(catalog.publications.map(\.category) == [.manga, .comics, .comics, .manga])
+}
+
+@Test func findsAPrivateSeriesVolumesInThePrivateCollection() async throws {
+  let transport = RoutingTransport(responses: [
+    "/opds/v2/publications.json": feed(publications: [
+      publication(id: "private-1", title: "Behind Glass")
+    ])
+  ])
+  let client = makeClient(transport: transport)
+  let series = SeriesReference(id: "series-9", title: "Glass")
+
+  let volumes = try await client.publications(in: series, library: "Home", isPrivate: true)
+  _ = try await client.publications(in: series, library: "Home")
+
+  #expect(volumes.map(\.isPrivate) == [true])
+  let queries = await transport.requests.map { $0.url?.query }
+  #expect(queries == ["series=Glass&library=Home&collection=private", "series=Glass&library=Home"])
 }
 
 @Test func filesTheCatalogByCategoryWithoutLibraries() async throws {
@@ -126,6 +210,7 @@ import Testing
         "localName": "Tsuki no Niwa",
         "title": "Moon Garden",
         "publicationCount": 3,
+        "isPrivate": true,
         "metadata": {
           "provider": "mangabaka",
           "sourceUrl": "https://mangabaka.dev/42",
@@ -158,6 +243,7 @@ import Testing
   #expect(detail.isRetitled)
   #expect(detail.category == .manga)
   #expect(detail.publicationCount == 3)
+  #expect(detail.isPrivate)
   let metadata = try #require(detail.metadata)
   #expect(metadata.providerName == "MangaBaka")
   #expect(metadata.sourceURL == URL(string: "https://mangabaka.dev/42"))
@@ -181,6 +267,8 @@ import Testing
   #expect(detail.title == "Quiet Series")
   #expect(!detail.isRetitled)
   #expect(detail.metadata == nil)
+  // Servers from before the Private Collection send no `isPrivate`.
+  #expect(!detail.isPrivate)
 }
 
 @Test func followsTheManifestUntilEveryPageIsDescribed() async throws {
@@ -336,8 +424,7 @@ import Testing
     responses: [:], statuses: ["GET /api/v1/publications/volume-2/progress": 404])
   let client = makeClient(transport: transport)
 
-  try await client.save(
-    ReadingPosition(publicationID: "volume-1", page: 12, mode: .double, completed: false))
+  try await client.save(ReadingPosition(publicationID: "volume-1", page: 12, completed: false))
   try await client.clearPosition(for: "volume-1")
   let missing = try await client.position(for: "volume-2")
 
@@ -348,7 +435,8 @@ import Testing
   let body = try #require(requests[0].httpBody)
   let sent = try JSONSerialization.jsonObject(with: body) as? [String: Any]
   #expect(sent?["page"] as? Int == 12)
-  #expect(sent?["mode"] as? String == "double")
+  // The account's mode is left as older apps set it; this one keeps its own per series.
+  #expect(sent?["mode"] == nil)
   #expect(sent?["completed"] as? Bool == false)
   #expect(requests[1].url?.path == "/api/v1/publications/volume-1/progress")
 }
@@ -361,12 +449,53 @@ import Testing
   ])
   let client = makeClient(transport: transport)
 
-  try await client.authenticate()
+  let account = try await client.authenticate()
 
+  // An answer this client cannot read: the credentials work, but
+  // administration is not offered.
+  #expect(account == Account(username: "reader", isAdministrator: false))
   let requests = await transport.requests
   #expect(requests.count == 2)
   #expect(requests[0].value(forHTTPHeaderField: "Authorization") == nil)
   #expect(requests[1].value(forHTTPHeaderField: "Authorization")?.hasPrefix("Basic ") == true)
+}
+
+@Test func readsWhetherTheAccountAdministersTheServer() async throws {
+  let transport = RoutingTransport(responses: [
+    "/api/v1/auth/me": Data(#"{"id": "1", "username": "curator", "isAdmin": true}"#.utf8)
+  ])
+
+  let account = try await makeClient(transport: transport).account()
+
+  #expect(account == Account(username: "curator", isAdministrator: true))
+}
+
+@Test func movesASeriesIntoThePrivateCollection() async throws {
+  let transport = RoutingTransport(responses: [
+    "/api/v1/series/series-1/privacy": Data(
+      #"{"id": "series-1", "localName": "Moon Garden", "isPrivate": true}"#.utf8)
+  ])
+
+  let detail = try await makeClient(transport: transport).setPrivate(true, seriesID: "series-1")
+
+  #expect(detail.isPrivate)
+  let request = try #require(await transport.requests.first)
+  #expect(request.httpMethod == "PUT")
+  #expect(request.url?.path == "/api/v1/series/series-1/privacy")
+  let body = try #require(request.httpBody)
+  #expect(try JSONSerialization.jsonObject(with: body) as? [String: Bool] == ["private": true])
+}
+
+@Test func reportsWhyNinevehRefusedToMoveASeries() async throws {
+  let transport = RoutingTransport(
+    responses: [
+      "/api/v1/series/series-1/privacy": Data(#"{"detail": "Administrator access required"}"#.utf8)
+    ],
+    statuses: ["PUT /api/v1/series/series-1/privacy": 403])
+
+  await #expect(throws: ReaderError.server(statusCode: 403, message: "Administrator access required")) {
+    try await makeClient(transport: transport).setPrivate(false, seriesID: "series-1")
+  }
 }
 
 @Test func requestsOnlyImageWidthsTheServerRenders() async throws {

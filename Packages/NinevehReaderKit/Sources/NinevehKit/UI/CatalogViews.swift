@@ -419,19 +419,30 @@ private enum SeriesSort: String, CaseIterable, Identifiable {
 struct BrowseView: View {
   @ObservedObject var model: ApplicationModel
   let library: String?
+  /// Browses the Private Collection rather than the public series.
+  var privateCollection = false
   @State private var arrangement: BrowseArrangement
   @State private var category: PublicationCategory?
   @State private var sort: SeriesSort = .title
   @Environment(\.contentPadding) private var contentPadding
 
-  init(model: ApplicationModel, library: String?, initialArrangement: BrowseArrangement = .series) {
+  init(
+    model: ApplicationModel, library: String?, privateCollection: Bool = false,
+    initialArrangement: BrowseArrangement = .series
+  ) {
     self.model = model
     self.library = library
+    self.privateCollection = privateCollection
     _arrangement = State(initialValue: initialArrangement)
   }
 
+  private var title: String {
+    library ?? (privateCollection ? LibrarySection.privateCollection.title : "All Series")
+  }
+
   var body: some View {
-    let series = sorted(model.seriesGroups(in: library, category: category))
+    let series = sorted(
+      model.seriesGroups(in: library, category: category, privateCollection: privateCollection))
     let volumes = series.flatMap(\.volumes)
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
@@ -457,19 +468,22 @@ struct BrowseView: View {
       if series.isEmpty && !model.isRefreshing {
         ContentUnavailableView(
           "Nothing Here Yet",
-          systemImage: "books.vertical",
-          description: Text("Series added to this library on Nineveh will appear here.")
+          systemImage: privateCollection ? "lock" : "books.vertical",
+          description: Text(
+            privateCollection
+              ? "Series made private on Nineveh will appear here."
+              : "Series added to this library on Nineveh will appear here.")
         )
       }
     }
-    .navigationTitle(library ?? "All Series")
+    .navigationTitle(title)
   }
 
   private func header(seriesCount: Int, volumeCount: Int) -> some View {
-    let categories = model.categories(in: library)
+    let categories = model.categories(in: library, privateCollection: privateCollection)
     return VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .firstTextBaseline, spacing: 14) {
-        Text(library ?? "All Series").pageTitleStyle()
+        Text(title).pageTitleStyle()
         Text("\(seriesCount.formatted()) series · \(volumeCount.formatted()) volumes")
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(ReaderTheme.secondaryText)
@@ -485,12 +499,14 @@ struct BrowseView: View {
           }
           Spacer()
           sortMenu
+          layoutPicker
         }
         VStack(alignment: .leading, spacing: 4) {
           HStack(alignment: .center, spacing: 16) {
             arrangementTabs
             Spacer(minLength: 0)
             sortMenu
+            layoutPicker
           }
           if categories.count > 1 {
             ScrollView(.horizontal) {
@@ -543,6 +559,11 @@ struct BrowseView: View {
     }
   }
 
+  @ViewBuilder
+  private var layoutPicker: some View {
+    if arrangement == .series { SeriesLayoutPicker() }
+  }
+
   private func sorted(_ series: [SeriesGroup]) -> [SeriesGroup] {
     switch sort {
     case .title:
@@ -570,10 +591,13 @@ struct SearchResultsView: View {
   @ObservedObject var model: ApplicationModel
   let query: String
   let library: String?
+  /// Searches the Private Collection, which is all a search from it looks through.
+  var privateCollection = false
   @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
-    let results = model.series(matching: query, in: library)
+    let results = model.series(
+      matching: query, in: library, privateCollection: privateCollection)
     ScrollView {
       VStack(alignment: .leading, spacing: 20) {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
@@ -581,6 +605,8 @@ struct SearchResultsView: View {
           Text(scopeDescription(count: results.count))
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(ReaderTheme.secondaryText)
+          Spacer(minLength: 0)
+          SeriesLayoutPicker()
         }
         SeriesGrid(model: model, series: results, showsLibrary: library == nil)
       }
@@ -594,7 +620,65 @@ struct SearchResultsView: View {
 
   private func scopeDescription(count: Int) -> String {
     let matches = count == 1 ? "1 series" : "\(count) series"
-    return library.map { "\(matches) in \($0)" } ?? matches
+    let scope = library ?? (privateCollection ? LibrarySection.privateCollection.title : nil)
+    return scope.map { "\(matches) in \($0)" } ?? matches
+  }
+}
+
+/// How series grids are laid out: one choice for every grid, remembered on
+/// this device, as the web remembers its own.
+enum SeriesLayout: String, CaseIterable, Identifiable {
+  case standard = "default"
+  case dense
+  case list
+
+  static let storageKey = "seriesLayout"
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .standard: "Default"
+    case .dense: "Dense"
+    case .list: "List"
+    }
+  }
+
+  var icon: String {
+    switch self {
+    case .standard: "square.grid.2x2"
+    case .dense: "square.grid.3x3"
+    case .list: "list.bullet"
+    }
+  }
+}
+
+/// The web's three layout buttons.
+struct SeriesLayoutPicker: View {
+  @AppStorage(SeriesLayout.storageKey) private var layout = SeriesLayout.standard
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(SeriesLayout.allCases) { option in
+        let chosen = option == layout
+        Button {
+          layout = option
+        } label: {
+          Image(systemName: option.icon)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(chosen ? .white : ReaderTheme.secondaryText)
+            .frame(width: 28, height: 22)
+            .background(
+              RoundedRectangle(cornerRadius: 5).fill(chosen ? ReaderTheme.raised : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(option.title) Layout")
+        .accessibilityLabel("\(option.title) Layout")
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+      }
+    }
+    .fixedSize()
   }
 }
 
@@ -602,21 +686,38 @@ struct SeriesGrid: View {
   @ObservedObject var model: ApplicationModel
   let series: [SeriesGroup]
   var showsLibrary = false
+  @AppStorage(SeriesLayout.storageKey) private var layout = SeriesLayout.standard
   @Environment(\.isNarrow) private var isNarrow
 
-  /// Two posters abreast even in a narrow window.
   private var columns: [GridItem] {
-    [
-      GridItem(
-        .adaptive(minimum: isNarrow ? 120 : 150, maximum: 190), spacing: ReaderTheme.cardSpacing)
-    ]
+    switch layout {
+    case .standard:
+      // Two posters abreast even in a narrow window.
+      [
+        GridItem(
+          .adaptive(minimum: isNarrow ? 120 : 150, maximum: 190),
+          spacing: ReaderTheme.cardSpacing)
+      ]
+    case .dense:
+      // Three abreast in a narrow window, as the web's dense grid on a phone.
+      [GridItem(.adaptive(minimum: isNarrow ? 90 : 112, maximum: 140), spacing: 12)]
+    case .list:
+      [GridItem(.flexible())]
+    }
   }
 
   var body: some View {
-    LazyVGrid(columns: columns, alignment: .leading, spacing: 26) {
+    LazyVGrid(columns: columns, alignment: .leading, spacing: layout == .standard ? 26 : 12) {
       ForEach(series) { group in
         NavigationLink(value: LibraryRoute.series(group.key)) {
-          SeriesCard(model: model, series: group, showsLibrary: showsLibrary)
+          switch layout {
+          case .standard:
+            SeriesCard(model: model, series: group, showsLibrary: showsLibrary)
+          case .dense:
+            SeriesCard(model: model, series: group, isDense: true)
+          case .list:
+            SeriesRow(model: model, series: group, showsLibrary: showsLibrary)
+          }
         }
         .buttonStyle(.plain)
       }
@@ -747,6 +848,8 @@ struct SeriesCard: View {
   @ObservedObject var model: ApplicationModel
   let series: SeriesGroup
   var showsLibrary = false
+  /// The dense layout's card: the name and count under the poster, no more.
+  var isDense = false
   @State private var hovering = false
 
   var body: some View {
@@ -788,14 +891,14 @@ struct SeriesCard: View {
         .padding(.bottom, 5)
       Text(model.displayTitle(for: series))
         .cardTitleStyle()
-      if let detail, detail.isRetitled {
+      if !isDense, let detail, detail.isRetitled {
         Text(detail.localName)
           .cardSubtitleStyle()
       }
-      Text(subtitle(progress))
+      Text(series.subtitle(progress))
         .cardSubtitleStyle()
-      if showsLibrary, !eyebrow.isEmpty {
-        Text(eyebrow)
+      if !isDense, showsLibrary, !series.eyebrow.isEmpty {
+        Text(series.eyebrow)
           .cardDetailStyle()
       }
     }
@@ -803,15 +906,74 @@ struct SeriesCard: View {
     .onHover { hovering = $0 }
     .accessibilityElement(children: .combine)
   }
+}
 
-  private var eyebrow: String {
-    [series.library, series.category == .unknown ? nil : series.category.title]
+/// The list layout's row: a small cover beside what a card shows under its poster.
+struct SeriesRow: View {
+  @ObservedObject var model: ApplicationModel
+  let series: SeriesGroup
+  var showsLibrary = false
+  @State private var hovering = false
+
+  var body: some View {
+    let detail = model.detail(for: series)
+    let progress = model.progress(for: series)
+    HStack(spacing: 16) {
+      SeriesCoverView(model: model, series: series)
+        .frame(width: 72, height: 72 / ReaderTheme.coverRatio)
+        .overlay(alignment: .bottom) {
+          if progress.fraction > 0, progress.fraction < 1 {
+            ReadingProgressBar(fraction: progress.fraction)
+          }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ReaderTheme.coverRadius))
+      VStack(alignment: .leading, spacing: 3) {
+        Text(model.displayTitle(for: series))
+          .cardTitleStyle()
+        if let detail, detail.isRetitled {
+          Text(detail.localName)
+            .cardSubtitleStyle()
+        }
+        Text(series.subtitle(progress))
+          .cardSubtitleStyle()
+        if showsLibrary, !series.eyebrow.isEmpty {
+          Text(series.eyebrow)
+            .cardDetailStyle()
+        }
+      }
+      Spacer(minLength: 0)
+      if model.downloadedCount(in: series) > 0 {
+        DownloadedBadge(count: model.downloadedCount(in: series), total: series.volumes.count)
+      }
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      RoundedRectangle(cornerRadius: 8)
+        .fill(hovering ? Color.white.opacity(0.1) : Color.white.opacity(0.04))
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 8)
+        .strokeBorder(ReaderTheme.accent, lineWidth: hovering ? 2 : 0)
+    }
+    .animation(.easeOut(duration: 0.12), value: hovering)
+    .contentShape(Rectangle())
+    .onHover { hovering = $0 }
+    .accessibilityElement(children: .combine)
+  }
+}
+
+extension SeriesGroup {
+  /// Where a series is filed: its library and category.
+  fileprivate var eyebrow: String {
+    [library, category == .unknown ? nil : category.title]
       .compactMap { $0 }
       .joined(separator: " · ")
   }
 
-  private func subtitle(_ progress: SeriesProgress) -> String {
-    let count = series.volumes.count == 1 ? "1 volume" : "\(series.volumes.count) volumes"
+  /// How many volumes a series has, and how far through them the account is.
+  fileprivate func subtitle(_ progress: SeriesProgress) -> String {
+    let count = volumes.count == 1 ? "1 volume" : "\(volumes.count) volumes"
     return [count, progress.summary].compactMap { $0 }.joined(separator: " · ")
   }
 }

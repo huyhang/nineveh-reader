@@ -185,17 +185,75 @@ import Testing
   let store = try ReaderStore(inMemory: true)
   let publication = Publication(id: "p1", title: "First", category: .comics)
   try store.cache(publications: [publication], connectionID: "server")
-  let position = ReadingPosition(
-    publicationID: publication.id,
-    page: 7,
-    mode: .double,
-    completed: false
-  )
+  let position = ReadingPosition(publicationID: publication.id, page: 7, completed: false)
   try store.saveProgress(position, key: "server|p1", pendingSync: true)
 
   #expect(try store.cachedPublications(connectionID: "server") == [publication])
   #expect(try store.progress(key: "server|p1")?.page == 7)
-  #expect(try store.progress(key: "server|p1")?.mode == .double)
+}
+
+@Test @MainActor func storeKeepsWhetherACachedPublicationIsPrivate() throws {
+  let store = try ReaderStore(inMemory: true)
+  let hidden = Publication(id: "p2", title: "Second", library: "Home", isPrivate: true)
+  try store.cache(
+    publications: [Publication(id: "p1", title: "First"), hidden], connectionID: "server")
+
+  let cached = try store.cachedPublications(connectionID: "server")
+  #expect(Dictionary(uniqueKeysWithValues: cached.map { ($0.id, $0.isPrivate) }) == ["p1": false, "p2": true])
+}
+
+@Test func readingModesAreRememberedPerSeries() async throws {
+  let suite = "nineveh-tests-\(UUID().uuidString)"
+  defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+  let store = UserDefaultsReadingPreferenceStore(
+    defaults: try #require(UserDefaults(suiteName: suite)))
+
+  #expect(await store.mode(for: "series|one") == nil)
+  await store.save(mode: .double, for: "series|one")
+  await store.save(mode: .scroll, for: "series|two")
+  #expect(await store.mode(for: "series|one") == .double)
+  #expect(await store.mode(for: "series|two") == .scroll)
+  #expect(await store.mode(for: "series|three") == nil)
+}
+
+@Test func aSeriesWithoutAModeOpensInTheOneEarlierVersionsKeptForAll() async throws {
+  let suite = "nineveh-tests-\(UUID().uuidString)"
+  defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+  try #require(UserDefaults(suiteName: suite)).set("double", forKey: "readingMode")
+  let store = UserDefaultsReadingPreferenceStore(
+    defaults: try #require(UserDefaults(suiteName: suite)))
+
+  #expect(await store.mode(for: "series|one") == .double)
+  await store.save(mode: .scroll, for: "series|one")
+  #expect(await store.mode(for: "series|one") == .scroll)
+  // Choosing for one series leaves the others as they were.
+  #expect(await store.mode(for: "series|two") == .double)
+  #expect(UserDefaults(suiteName: suite)?.string(forKey: "readingMode") == "double")
+}
+
+@Test @MainActor func eachSeriesOpensInTheModeLastChosenForIt() async throws {
+  let suite = "nineveh-tests-\(UUID().uuidString)"
+  defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+  let model = ApplicationModel.preview(preferenceStore: try #require(preferences(suite: suite)))
+  let connection = try #require(model.connection)
+  model.activate(
+    connection: connection,
+    client: NinevehClient(
+      connection: connection,
+      credentials: Credentials(username: "reader", password: "secret"),
+      transport: OfflineTransport()))
+  let moonGarden = try #require(model.seriesGroups.first { $0.title == "Moon Garden" })
+  let tinLantern = try #require(model.seriesGroups.first { $0.title == "Tin Lantern" })
+
+  await model.beginReading(moonGarden.volumes[0])
+  let first = try #require(model.presentedReader)
+  #expect(first.initialMode == .single)
+  await first.actions.saveMode(.double)
+
+  await model.beginReading(tinLantern.volumes[0])
+  #expect(model.presentedReader?.initialMode == .single)
+  await model.beginReading(try #require(moonGarden.volumes.last))
+  #expect(model.presentedReader?.initialMode == .double)
 }
 
 // MARK: - Library
@@ -208,6 +266,96 @@ import Testing
   #expect(model.series(matching: "LANTERN", in: "Studio Shelf").map(\.title) == ["Tin Lantern"])
   #expect(model.series(matching: "ren ishida").map(\.title) == ["Moon Garden", "Paper Kingdom"])
   #expect(model.series(matching: "月の庭").map(\.title) == ["Moon Garden"])
+}
+
+@Test @MainActor func libraryListsPrivateSeriesOnlyInThePrivateCollection() throws {
+  let model = ApplicationModel.preview()
+
+  #expect(model.privateSeriesGroups.map(\.title) == ["Quiet Hours", "Red Ledger"])
+  #expect(model.privateLibraries == ["Home Library", "Studio Shelf"])
+  // Not on Home, in a library, or in their searches.
+  #expect(!model.seriesGroups.contains { $0.isPrivate })
+  #expect(!model.publications.contains { $0.isPrivate })
+  #expect(model.seriesGroups(in: "Home Library").allSatisfy { !$0.isPrivate })
+  #expect(model.series(matching: "quiet").isEmpty)
+  #expect(!model.continueReading.contains { $0.id == "quiet-hours-1" })
+  // The collection has its own.
+  #expect(model.series(matching: "quiet", privateCollection: true).map(\.title) == ["Quiet Hours"])
+  #expect(
+    model.seriesGroups(in: "Studio Shelf", privateCollection: true).map(\.title) == ["Red Ledger"])
+  #expect(model.categories(in: nil, privateCollection: true) == [.comics, .manga])
+  // Its series still open like any other.
+  let quietHours = try #require(model.privateSeriesGroups.first)
+  #expect(model.series(for: quietHours.key)?.title == "Quiet Hours")
+  #expect(model.series(containing: quietHours.volumes[0])?.key == quietHours.key)
+  #expect(model.detail(for: quietHours)?.isPrivate == true)
+  #expect(model.progress(for: quietHours).fraction > 0)
+}
+
+@Test @MainActor func anAdministratorMovesASeriesIntoThePrivateCollectionAndBack() async throws {
+  let model = ApplicationModel.preview()
+  let server = ServerStub()
+  try connect(model, to: server)
+  let moonGarden = try #require(model.seriesGroups.first { $0.title == "Moon Garden" })
+  #expect(model.isAdministrator)
+
+  await model.setPrivate(true, for: moonGarden)
+
+  // Filed where Nineveh now lists it: only in the collection, page and all.
+  #expect(!model.seriesGroups.contains { $0.key == moonGarden.key })
+  #expect(!model.publications.contains { $0.series?.serverID == "moon-garden" })
+  #expect(model.series(matching: "moon").isEmpty)
+  #expect(model.series(matching: "moon", privateCollection: true).map(\.title) == ["Moon Garden"])
+  #expect(model.series(for: moonGarden.key)?.isPrivate == true)
+  #expect(model.detail(for: moonGarden)?.isPrivate == true)
+
+  await model.setPrivate(false, for: try #require(model.series(for: moonGarden.key)))
+
+  #expect(model.series(matching: "moon").map(\.title) == ["Moon Garden"])
+  #expect(model.series(for: moonGarden.key)?.isPrivate == false)
+  #expect(model.detail(for: moonGarden)?.isPrivate == false)
+  #expect(model.seriesBeingMoved.isEmpty)
+  let sent = await server.requests
+  #expect(sent.map(\.httpMethod) == ["PUT", "PUT"])
+  #expect(sent.allSatisfy { $0.url?.path == "/api/v1/series/moon-garden/privacy" })
+  let bodies = sent.map { request in
+    request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Bool] }
+  }
+  #expect(bodies == [["private": true], ["private": false]])
+}
+
+@Test @MainActor func stopsOfferingThePrivateCollectionOnceNinevehRefuses() async throws {
+  let model = ApplicationModel.preview()
+  try connect(model, to: ServerStub(refusesPrivacy: true))
+  let moonGarden = try #require(model.seriesGroups.first { $0.title == "Moon Garden" })
+
+  await model.setPrivate(true, for: moonGarden)
+
+  #expect(model.series(for: moonGarden.key)?.isPrivate == false)
+  #expect(model.alertMessage == "Administrator access required")
+  // No longer an administrator, so the series page no longer offers the move.
+  #expect(!model.isAdministrator)
+}
+
+@Test @MainActor func learnsTheAccountOnceNinevehAnswers() async throws {
+  // As after a launch with Nineveh unreachable: connected, account unknown.
+  let model = ApplicationModel(store: try ReaderStore(inMemory: true))
+  let server = ServerStub()
+  let connection = try ServerConnection.validated(
+    urlText: "https://library.example", username: "reader")
+  model.activate(
+    connection: connection,
+    client: NinevehClient(
+      connection: connection, credentials: Credentials(username: "reader", password: "secret"),
+      transport: server))
+  #expect(model.account == nil)
+
+  await model.refresh()
+  await model.refresh()
+
+  #expect(model.isAdministrator)
+  let asked = await server.requests.filter { $0.url?.path == "/api/v1/auth/me" }
+  #expect(asked.count == 1)
 }
 
 @Test @MainActor func libraryShelvesWhatToReadNext() {
@@ -259,10 +407,12 @@ import Testing
   #expect(!model.publications.contains { $0.library == "Studio Shelf" })
   #expect(model.seriesGroups(in: "Studio Shelf").isEmpty)
   #expect(model.series(matching: "lantern").map(\.title) == ["Moon Garden"])
+  #expect(model.privateSeriesGroups.map(\.title) == ["Quiet Hours"])
   #expect(await visibility.saved == ["Studio Shelf"])
 
   model.setLibrary("Home Library", shown: false)
   #expect(model.publications.isEmpty)
+  #expect(model.privatePublications.isEmpty)
   #expect(model.continueReading.isEmpty)
   #expect(model.shownDownloads.isEmpty)
   #expect(model.downloads.count == 1)
@@ -320,8 +470,7 @@ private func session(
     publicationID: "volume-1",
     title: "Volume One",
     source: StubPageSource(pageCount: pageCount),
-    initialPosition: ReadingPosition(
-      publicationID: "volume-1", page: page, mode: mode, completed: completed),
+    initialPosition: ReadingPosition(publicationID: "volume-1", page: page, completed: completed),
     startsAtBeginning: startsAtBeginning,
     initialMode: mode,
     defaultDirection: defaultDirection,
@@ -344,6 +493,82 @@ private struct StubPageSource: PageProviding {
 
   func page(number: Int, maximumPixelWidth: Int?) async throws -> Data {
     Data("page-\(number)".utf8)
+  }
+}
+
+/// Reading preferences kept in a suite of their own.
+private func preferences(suite: String) -> UserDefaultsReadingPreferenceStore? {
+  guard let defaults = UserDefaults(suiteName: suite) else { return nil }
+  return UserDefaultsReadingPreferenceStore(defaults: defaults)
+}
+
+/// A server that never answers, so a volume opens from what the device has.
+private struct OfflineTransport: HTTPTransport {
+  func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+    throw URLError(.notConnectedToInternet)
+  }
+
+  func download(for request: URLRequest) async throws -> (URL, URLResponse) {
+    throw URLError(.notConnectedToInternet)
+  }
+}
+
+/// Connects a preview library to `transport`, as signing in would.
+@MainActor private func connect(_ model: ApplicationModel, to transport: some HTTPTransport) throws {
+  let connection = try #require(model.connection)
+  model.activate(
+    connection: connection,
+    client: NinevehClient(
+      connection: connection, credentials: Credentials(username: "reader", password: "secret"),
+      transport: transport))
+}
+
+/// Answers as Nineveh does for an administrator with an empty catalog, or
+/// refuses a series' move as it does for any other account.
+private actor ServerStub: HTTPTransport {
+  let refusesPrivacy: Bool
+  private(set) var requests: [URLRequest] = []
+
+  init(refusesPrivacy: Bool = false) {
+    self.refusesPrivacy = refusesPrivacy
+  }
+
+  func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+    requests.append(request)
+    guard let url = request.url else { throw URLError(.badURL) }
+    var status = 200
+    let body: String
+    switch url.path {
+    case "/api/v1/auth/me":
+      body = #"{"id": "1", "username": "reader", "isAdmin": true, "enabled": true}"#
+    case "/opds/v2/catalog.json":
+      body = #"{"metadata": {"title": "Nineveh"}, "links": [], "navigation": []}"#
+    case "/opds/v2/publications.json":
+      body = #"{"metadata": {"title": "Publications"}, "publications": [], "links": []}"#
+    case let path where path.hasSuffix("/privacy") && refusesPrivacy:
+      status = 403
+      body = #"{"detail": "Administrator access required"}"#
+    case let path where path.hasSuffix("/privacy"):
+      let id = url.deletingLastPathComponent().lastPathComponent
+      let sent = request.httpBody.flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: Bool]
+      }
+      body = #"""
+        {"id": "\#(id)", "library": "Home Library", "category": "manga",
+         "localName": "\#(id)", "title": "\#(id)", "publicationCount": 3,
+         "metadata": null, "isPrivate": \#(sent?["private"] == true)}
+        """#
+    default:
+      status = 404
+      body = #"{"detail": "Not Found"}"#
+    }
+    let response = HTTPURLResponse(
+      url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)
+    return (Data(body.utf8), response ?? URLResponse())
+  }
+
+  func download(for request: URLRequest) async throws -> (URL, URLResponse) {
+    throw URLError(.unsupportedURL)
   }
 }
 

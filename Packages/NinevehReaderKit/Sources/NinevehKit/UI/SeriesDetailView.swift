@@ -23,6 +23,7 @@ private struct SeriesPage: View {
   let series: SeriesGroup
   @State private var coverData: Data?
   @State private var showsFullDescription = false
+  @State private var pageWidth: CGFloat = 0
   @Environment(\.openURL) private var openURL
   @Environment(\.isNarrow) private var isNarrow
   @Environment(\.contentPadding) private var contentPadding
@@ -47,6 +48,8 @@ private struct SeriesPage: View {
       .frame(maxWidth: 1_180, alignment: .leading)
       .frame(maxWidth: .infinity)
     }
+    // Measured for the hero, which stacks on a narrow page.
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
     .background(alignment: .top) { backdrop }
     .navigationTitle(model.displayTitle(for: series))
     .task(id: "\(series.id.library ?? "")|\(series.id.id)|\(model.coverGeneration)") {
@@ -82,7 +85,8 @@ private struct SeriesPage: View {
 
   private func hero(detail: SeriesDetail?, metadata: SeriesMetadata?) -> some View {
     let progress = model.progress(for: series)
-    let layout = heroLayout(narrow: isNarrow)
+    let layout = heroLayout(
+      narrow: isNarrow || stacksHero(pageWidth: pageWidth, padding: contentPadding))
     return layout {
       CoverArtwork(data: coverData, title: series.title, category: series.category)
         .frame(width: 220, height: 330)
@@ -151,9 +155,13 @@ private struct SeriesPage: View {
 
   private var eyebrow: String {
     let count = series.volumes.count == 1 ? "1 volume" : "\(series.volumes.count) volumes"
-    return [series.category == .unknown ? nil : series.category.title, count, series.library]
-      .compactMap { $0 }
-      .joined(separator: " · ")
+    // Marked as the web marks it, going by where the catalog lists the series.
+    return [
+      series.category == .unknown ? nil : series.category.title, count, series.library,
+      series.isPrivate ? "Private" : nil,
+    ]
+    .compactMap { $0 }
+    .joined(separator: " · ")
   }
 
   private func seriesProgressText(_ progress: SeriesProgress) -> String {
@@ -187,8 +195,11 @@ private struct SeriesPage: View {
     return (first, "Read Again", true)
   }
 
+  /// Continue on a line of its own, and under it every other action, alike
+  /// in width. Where their labels no longer fit on one line, only their
+  /// icons show, each still named in its tooltip.
   private var actions: some View {
-    ActionRow {
+    VStack(alignment: .leading, spacing: 10) {
       if let next = nextToRead {
         Button {
           Task { await model.beginReading(next.publication, fromStart: next.fromStart) }
@@ -198,6 +209,15 @@ private struct SeriesPage: View {
         .buttonStyle(.accent)
       }
 
+      ViewThatFits(in: .horizontal) {
+        secondaryActions
+        secondaryActions.labelStyle(.iconOnly)
+      }
+    }
+  }
+
+  private var secondaryActions: some View {
+    EqualWidthRow(spacing: 10) {
       downloadAllButton
 
       if let webURL {
@@ -220,8 +240,24 @@ private struct SeriesPage: View {
         .disabled(model.isRefreshingMetadata)
         .help("Fetch this series' details and cover from Nineveh again")
       }
+
+      if let serverID = series.serverID, model.isAdministrator {
+        let moving = model.seriesBeingMoved.contains(serverID)
+        Button {
+          Task { await model.setPrivate(!series.isPrivate, for: series) }
+        } label: {
+          Label(
+            moving ? "Moving…" : series.isPrivate ? "Move to Library" : "Make Private",
+            systemImage: series.isPrivate ? "lock.open" : "lock")
+        }
+        .disabled(moving)
+        .help(
+          series.isPrivate
+            ? "List this series in its library again"
+            : "List this series only in the Private Collection, out of its library")
+      }
     }
-    .buttonStyle(.chrome)
+    .buttonStyle(.chrome(fillsWidth: true))
   }
 
   @ViewBuilder
@@ -233,12 +269,14 @@ private struct SeriesPage: View {
     if !pending.isEmpty {
       Label("Downloading \(pending.count)…", systemImage: "arrow.down.circle")
         .foregroundStyle(.secondary)
+        .help("Downloading \(pending.count) of this series' volumes")
     } else if downloaded.count == series.volumes.count, !needsUpdate {
       Label(
         series.volumes.count == 1 ? "Downloaded" : "All Downloaded",
         systemImage: "checkmark.circle.fill"
       )
       .foregroundStyle(.green)
+      .help("Every volume in this series is on this \(Device.name)")
     } else if model.connection != nil {
       Button {
         Task { await model.downloadSeries(series) }
@@ -248,6 +286,10 @@ private struct SeriesPage: View {
             ? "Update Downloads" : series.volumes.count == 1 ? "Download" : "Download All",
           systemImage: needsUpdate ? "arrow.triangle.2.circlepath" : "arrow.down.circle")
       }
+      .help(
+        needsUpdate
+          ? "Download the newer copies Nineveh has of this series' volumes"
+          : "Download every volume in this series to read offline")
     }
   }
 
@@ -479,13 +521,15 @@ private struct VolumeCard: View {
 struct PublicationDetailView: View {
   @ObservedObject var model: ApplicationModel
   let publication: Publication
+  @State private var pageWidth: CGFloat = 0
   @Environment(\.isNarrow) private var isNarrow
   @Environment(\.contentPadding) private var contentPadding
 
   var body: some View {
     let series = model.series(containing: publication)
     let progress = model.progress(for: publication)
-    let hero = heroLayout(narrow: isNarrow)
+    let hero = heroLayout(
+      narrow: isNarrow || stacksHero(pageWidth: pageWidth, padding: contentPadding))
     ScrollView {
       VStack(alignment: .leading, spacing: 30) {
         hero {
@@ -565,6 +609,8 @@ struct PublicationDetailView: View {
       }
       .padding(contentPadding)
     }
+    // Measured for the hero, which stacks on a narrow page.
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pageWidth = $0 }
     .navigationTitle(publication.title)
   }
 
@@ -654,7 +700,42 @@ private func heroLayout(narrow: Bool) -> AnyLayout {
     : AnyLayout(HStackLayout(alignment: .top, spacing: 32))
 }
 
+/// Whether a detail page this wide puts its cover above its text. Beside the
+/// cover, the text needs room for its title and a couple of buttons a line;
+/// a Mac window is never narrow, but its page can be, with the sidebar open.
+private func stacksHero(pageWidth: CGFloat, padding: CGFloat) -> Bool {
+  pageWidth > 0 && pageWidth - 2 * padding < 220 + 32 + 340
+}
+
+/// Lays views out side by side, each as wide as the widest of them.
+struct EqualWidthRow: Layout {
+  var spacing: CGFloat = 10
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+    let width = sizes.map(\.width).max() ?? 0
+    return CGSize(
+      width: width * CGFloat(sizes.count) + spacing * CGFloat(max(sizes.count - 1, 0)),
+      height: sizes.map(\.height).max() ?? 0)
+  }
+
+  func placeSubviews(
+    in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+  ) {
+    let width = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+    for (offset, subview) in subviews.enumerated() {
+      subview.place(
+        at: CGPoint(
+          x: bounds.minX + (width + spacing) * CGFloat(offset) + width / 2, y: bounds.midY),
+        anchor: .center,
+        proposal: ProposedViewSize(width: width, height: nil))
+    }
+  }
+}
+
 /// Lays views out in rows, wrapping when a row is full, like tags on the web.
+/// A view wider than a row on its own gets the row's width, so its label
+/// wraps rather than running off the page.
 struct FlowLayout: Layout {
   var spacing: CGFloat = 6
 
@@ -671,10 +752,10 @@ struct FlowLayout: Layout {
     var y = bounds.minY
     for row in rows(for: subviews, width: bounds.width) {
       var x = bounds.minX
-      for index in row.indices {
-        let size = subviews[index].sizeThatFits(.unspecified)
+      for (index, size) in zip(row.indices, row.sizes) {
         subviews[index].place(
-          at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: .unspecified)
+          at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+          proposal: ProposedViewSize(size))
         x += size.width + spacing
       }
       y += row.height + spacing
@@ -683,6 +764,7 @@ struct FlowLayout: Layout {
 
   private struct Row {
     var indices: [Int] = []
+    var sizes: [CGSize] = []
     var width: CGFloat = 0
     var height: CGFloat = 0
   }
@@ -691,7 +773,10 @@ struct FlowLayout: Layout {
     var rows: [Row] = []
     var current = Row()
     for index in subviews.indices {
-      let size = subviews[index].sizeThatFits(.unspecified)
+      var size = subviews[index].sizeThatFits(.unspecified)
+      if size.width > width {
+        size = subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil))
+      }
       let proposed = current.indices.isEmpty ? size.width : current.width + spacing + size.width
       if proposed > width, !current.indices.isEmpty {
         rows.append(current)
@@ -700,6 +785,7 @@ struct FlowLayout: Layout {
       current.width = current.indices.isEmpty ? size.width : current.width + spacing + size.width
       current.height = max(current.height, size.height)
       current.indices.append(index)
+      current.sizes.append(size)
     }
     if !current.indices.isEmpty { rows.append(current) }
     return rows

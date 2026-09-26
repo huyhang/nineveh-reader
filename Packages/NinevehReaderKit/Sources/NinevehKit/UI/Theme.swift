@@ -123,6 +123,8 @@ struct AccentButtonStyle: ButtonStyle {
 
 /// A quieter button beside the gold one: grey, with white text.
 struct ChromeButtonStyle: ButtonStyle {
+  /// Grows to the width it is offered, so buttons in a row can match.
+  var fillsWidth = false
   @Environment(\.isEnabled) private var isEnabled
 
   func makeBody(configuration: Configuration) -> some View {
@@ -130,7 +132,7 @@ struct ChromeButtonStyle: ButtonStyle {
       .font(.system(size: 13, weight: .semibold))
       .foregroundStyle(.white)
       .padding(.horizontal, 14)
-      .frame(minHeight: 30)
+      .frame(maxWidth: fillsWidth ? .infinity : nil, minHeight: 30)
       .background(
         Color.white.opacity(configuration.isPressed ? 0.22 : 0.12),
         in: RoundedRectangle(cornerRadius: 4))
@@ -164,6 +166,9 @@ extension ButtonStyle where Self == AccentButtonStyle {
 
 extension ButtonStyle where Self == ChromeButtonStyle {
   static var chrome: ChromeButtonStyle { ChromeButtonStyle() }
+  static func chrome(fillsWidth: Bool) -> ChromeButtonStyle {
+    ChromeButtonStyle(fillsWidth: fillsWidth)
+  }
 }
 
 extension ButtonStyle where Self == ChromeIconButtonStyle {

@@ -99,6 +99,17 @@ def main() -> None:
     catalog = server.get("/opds/v2/catalog.json")
     save("catalog.json", catalog, "GET /opds/v2/catalog.json")
 
+    # Listed only for an account that can see private series.
+    if any(
+        urllib.parse.urlsplit(link["href"]).path.endswith("/opds/v2/private.json")
+        for link in catalog["navigation"]
+    ):
+        save(
+            "private.json",
+            server.get("/opds/v2/private.json"),
+            "GET /opds/v2/private.json",
+        )
+
     libraries = [
         name for link in catalog["navigation"] if (name := query_value(link["href"], "library"))
     ]

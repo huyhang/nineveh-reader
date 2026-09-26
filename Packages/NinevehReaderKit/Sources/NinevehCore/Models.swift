@@ -40,6 +40,19 @@ public struct Credentials: Sendable, Equatable {
   }
 }
 
+/// Who a server says the credentials sign in as.
+public struct Account: Hashable, Sendable {
+  public let username: String
+  /// May administer the server, such as moving a series into or out of the
+  /// Private Collection.
+  public let isAdministrator: Bool
+
+  public init(username: String, isAdministrator: Bool = false) {
+    self.username = username
+    self.isAdministrator = isAdministrator
+  }
+}
+
 public enum PublicationCategory: String, Codable, CaseIterable, Sendable {
   case comics
   case manga
@@ -78,6 +91,8 @@ public struct Publication: Codable, Hashable, Identifiable, Sendable {
   public let summary: String?
   public let fileSize: Int64?
   public let library: String?
+  /// Listed in the server's Private Collection rather than its libraries.
+  public let isPrivate: Bool
 
   public init(
     id: String,
@@ -92,7 +107,8 @@ public struct Publication: Codable, Hashable, Identifiable, Sendable {
     revision: String? = nil,
     summary: String? = nil,
     fileSize: Int64? = nil,
-    library: String? = nil
+    library: String? = nil,
+    isPrivate: Bool = false
   ) {
     self.id = id
     self.title = title
@@ -107,15 +123,43 @@ public struct Publication: Codable, Hashable, Identifiable, Sendable {
     self.summary = summary
     self.fileSize = fileSize
     self.library = library
+    self.isPrivate = isPrivate
   }
 
-  /// The same publication filed under the library and category whose feed
-  /// listed it; OPDS publications do not name either themselves.
-  public func filed(in category: PublicationCategory, library: String?) -> Publication {
+  private enum CodingKeys: String, CodingKey {
+    case id, title, subtitle, authors, series, volume, category, pageCount, coverURL, revision
+    case summary, fileSize, library, isPrivate
+  }
+
+  /// Catalogs cached before the Private Collection name no `isPrivate`.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      id: try container.decode(String.self, forKey: .id),
+      title: try container.decode(String.self, forKey: .title),
+      subtitle: try container.decodeIfPresent(String.self, forKey: .subtitle),
+      authors: try container.decode([String].self, forKey: .authors),
+      series: try container.decodeIfPresent(SeriesReference.self, forKey: .series),
+      volume: try container.decodeIfPresent(String.self, forKey: .volume),
+      category: try container.decode(PublicationCategory.self, forKey: .category),
+      pageCount: try container.decodeIfPresent(Int.self, forKey: .pageCount),
+      coverURL: try container.decodeIfPresent(URL.self, forKey: .coverURL),
+      revision: try container.decodeIfPresent(String.self, forKey: .revision),
+      summary: try container.decodeIfPresent(String.self, forKey: .summary),
+      fileSize: try container.decodeIfPresent(Int64.self, forKey: .fileSize),
+      library: try container.decodeIfPresent(String.self, forKey: .library),
+      isPrivate: try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false)
+  }
+
+  /// The same publication filed under the library, category, and collection
+  /// whose feed listed it; OPDS publications name none of them themselves.
+  public func filed(
+    in category: PublicationCategory, library: String?, isPrivate: Bool = false
+  ) -> Publication {
     Publication(
       id: id, title: title, subtitle: subtitle, authors: authors, series: series, volume: volume,
       category: category, pageCount: pageCount, coverURL: coverURL, revision: revision,
-      summary: summary, fileSize: fileSize, library: library ?? self.library)
+      summary: summary, fileSize: fileSize, library: library ?? self.library, isPrivate: isPrivate)
   }
 
   /// The volume as a number, for ordering a series; `nil` sorts last.
@@ -209,6 +253,8 @@ public struct SeriesDetail: Codable, Hashable, Identifiable, Sendable {
   public let title: String
   public let publicationCount: Int
   public let metadata: SeriesMetadata?
+  /// Kept out of the libraries, in the server's Private Collection.
+  public let isPrivate: Bool
 
   public init(
     id: String,
@@ -217,7 +263,8 @@ public struct SeriesDetail: Codable, Hashable, Identifiable, Sendable {
     localName: String,
     title: String,
     publicationCount: Int,
-    metadata: SeriesMetadata? = nil
+    metadata: SeriesMetadata? = nil,
+    isPrivate: Bool = false
   ) {
     self.id = id
     self.library = library
@@ -226,6 +273,25 @@ public struct SeriesDetail: Codable, Hashable, Identifiable, Sendable {
     self.title = title
     self.publicationCount = publicationCount
     self.metadata = metadata
+    self.isPrivate = isPrivate
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id, library, category, localName, title, publicationCount, metadata, isPrivate
+  }
+
+  /// Details cached before the Private Collection name no `isPrivate`.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      id: try container.decode(String.self, forKey: .id),
+      library: try container.decode(String.self, forKey: .library),
+      category: try container.decode(PublicationCategory.self, forKey: .category),
+      localName: try container.decode(String.self, forKey: .localName),
+      title: try container.decode(String.self, forKey: .title),
+      publicationCount: try container.decode(Int.self, forKey: .publicationCount),
+      metadata: try container.decodeIfPresent(SeriesMetadata.self, forKey: .metadata),
+      isPrivate: try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false)
   }
 
   /// Whether the display title hides the name the series is filed under.
@@ -386,23 +452,22 @@ public enum ReadingDirectionPreference: String, Codable, CaseIterable, Sendable 
   }
 }
 
+/// Where the account is in one volume. How the volume is laid out is not part
+/// of it: each device remembers a reading mode per series for itself.
 public struct ReadingPosition: Codable, Hashable, Sendable {
   public let publicationID: String
   public let page: Int
-  public let mode: ReadingMode
   public let completed: Bool
   public let updatedAt: Date
 
   public init(
     publicationID: String,
     page: Int,
-    mode: ReadingMode,
     completed: Bool,
     updatedAt: Date = .now
   ) {
     self.publicationID = publicationID
     self.page = page
-    self.mode = mode
     self.completed = completed
     self.updatedAt = updatedAt
   }

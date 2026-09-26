@@ -18,11 +18,14 @@ public final class ApplicationModel: ObservableObject {
   }
 
   @Published public private(set) var phase: Phase = .restoring
-  /// The publications in libraries that are shown.
-  @Published public private(set) var publications: [Publication] = [] {
-    didSet { reindexSeries() }
-  }
+  /// The public publications in libraries that are shown.
+  @Published public private(set) var publications: [Publication] = []
   @Published public private(set) var seriesGroups: [SeriesGroup] = []
+  /// The Private Collection's publications in libraries that are shown. Like
+  /// the web's, they are listed only in the collection: not on Home, in the
+  /// libraries, or in their searches.
+  @Published public private(set) var privatePublications: [Publication] = []
+  @Published public private(set) var privateSeriesGroups: [SeriesGroup] = []
   /// The libraries that are shown.
   @Published public private(set) var libraries: [LibrarySummary] = []
   /// Every library on the server, hidden or not.
@@ -34,8 +37,13 @@ public final class ApplicationModel: ObservableObject {
   @Published public private(set) var localBooks: [LocalBook] = []
   @Published public private(set) var positions: [String: ReadingPosition] = [:]
   @Published public private(set) var connection: ServerConnection?
+  /// The signed-in account as Nineveh last described it; `nil` until it has
+  /// answered since launch.
+  @Published public private(set) var account: Account?
   @Published public private(set) var isRefreshing = false
   @Published public private(set) var isRefreshingMetadata = false
+  /// Series being moved into or out of the Private Collection, by server id.
+  @Published public private(set) var seriesBeingMoved: Set<String> = []
   /// Changes when series covers are fetched again, so views showing one reload it.
   @Published public private(set) var coverGeneration = 0
   @Published public var presentedReader: ReaderDestination?
@@ -56,7 +64,8 @@ public final class ApplicationModel: ObservableObject {
   private var positionTask: Task<Void, Never>?
   private var downloadQueue: [Publication] = []
   private var activeDownloadID: String?
-  /// Every publication on the server, including those in hidden libraries.
+  /// Every publication on the server, public or private, including those in
+  /// hidden libraries.
   private var catalog: [Publication] = []
   /// The latest write of `hiddenLibraries`, which the next one waits for.
   private(set) var visibilitySave: Task<Void, Never>?
@@ -99,6 +108,7 @@ public final class ApplicationModel: ObservableObject {
   }
 
   public static func preview(
+    preferenceStore: any ReadingPreferenceStoring = UserDefaultsReadingPreferenceStore(),
     libraryVisibilityStore: any LibraryVisibilityStoring = UserDefaultsLibraryVisibilityStore()
   ) -> ApplicationModel {
     guard let url = URL(string: "https://library.example") else {
@@ -106,10 +116,13 @@ public final class ApplicationModel: ObservableObject {
     }
     do {
       let model = ApplicationModel(
-        store: try ReaderStore(inMemory: true), libraryVisibilityStore: libraryVisibilityStore)
+        store: try ReaderStore(inMemory: true), preferenceStore: preferenceStore,
+        libraryVisibilityStore: libraryVisibilityStore)
       let connection = ServerConnection(baseURL: url, username: "reader")
       let publications = PreviewCatalog.publications
       model.connection = connection
+      // An administrator, so the series pages show every action.
+      model.account = Account(username: connection.username, isAdministrator: true)
       model.catalog = publications
       model.allLibraries = PreviewCatalog.libraries
       model.applyVisibility()
@@ -131,7 +144,6 @@ public final class ApplicationModel: ObservableObject {
         model.positions["\(connection.identity)|\(id)"] = ReadingPosition(
           publicationID: id,
           page: page,
-          mode: .double,
           completed: completed,
           updatedAt: .now.addingTimeInterval(-Double(page) * 60)
         )
@@ -200,6 +212,8 @@ public final class ApplicationModel: ObservableObject {
     libraryPath = []
     catalog = []
     publications = []
+    privatePublications = []
+    reindexSeries()
     allLibraries = []
     libraries = []
     hiddenLibraries = []
@@ -207,6 +221,7 @@ public final class ApplicationModel: ObservableObject {
     downloads = []
     positions = [:]
     connection = nil
+    account = nil
     phase = .signedOut
   }
 
@@ -233,6 +248,8 @@ public final class ApplicationModel: ObservableObject {
       saveCatalogExtras()
       prefetchSeriesDetails()
       startPositionSync()
+      // Unknown when Nineveh was unreachable at launch.
+      if account == nil { account = try? await client.account() }
     } catch {
       if catalog.isEmpty { loadOfflineLibrary() }
       alertMessage = error.localizedDescription
@@ -245,7 +262,7 @@ public final class ApplicationModel: ObservableObject {
   public func refreshMetadata(for series: SeriesGroup? = nil) async {
     guard let client, let connection, !isRefreshingMetadata else { return }
     let ids = series.map { $0.serverID.map { [$0] } ?? [] }
-      ?? Array(Set(seriesGroups.compactMap(\.serverID)))
+      ?? Array(Set((seriesGroups + privateSeriesGroups).compactMap(\.serverID)))
     guard !ids.isEmpty else { return }
     isRefreshingMetadata = true
     defer { isRefreshingMetadata = false }
@@ -340,25 +357,38 @@ public final class ApplicationModel: ObservableObject {
     return publication.authors
   }
 
-  public func seriesGroups(in library: String?, category: PublicationCategory? = nil)
-    -> [SeriesGroup]
-  {
-    seriesGroups.filter { group in
+  /// Public series, or with `privateCollection` the Private Collection's.
+  public func seriesGroups(
+    in library: String?, category: PublicationCategory? = nil, privateCollection: Bool = false
+  ) -> [SeriesGroup] {
+    (privateCollection ? privateSeriesGroups : seriesGroups).filter { group in
       (library == nil || group.library == library)
         && (category == nil || group.category == category)
     }
   }
 
-  public func categories(in library: String?) -> [PublicationCategory] {
-    let present = Set(seriesGroups(in: library).map(\.category))
+  public func categories(in library: String?, privateCollection: Bool = false)
+    -> [PublicationCategory]
+  {
+    let present = Set(
+      seriesGroups(in: library, privateCollection: privateCollection).map(\.category))
     return PublicationCategory.allCases.filter(present.contains)
+  }
+
+  /// The libraries the Private Collection has series in, as the server
+  /// names them, leaving out hidden ones.
+  public var privateLibraries: [String] {
+    Set(privateSeriesGroups.compactMap(\.library))
+      .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
   }
 
   /// Series whose titles, alternative titles, or creators contain every word
   /// of `query`, ignoring case and accents.
-  public func series(matching query: String, in library: String? = nil) -> [SeriesGroup] {
+  public func series(
+    matching query: String, in library: String? = nil, privateCollection: Bool = false
+  ) -> [SeriesGroup] {
     let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
-    let candidates = seriesGroups(in: library)
+    let candidates = seriesGroups(in: library, privateCollection: privateCollection)
     guard !words.isEmpty else { return candidates }
     return candidates.filter { group in
       let haystack = searchText(for: group)
@@ -378,6 +408,40 @@ public final class ApplicationModel: ObservableObject {
       saveCatalogExtras()
     }
     await syncPositions(for: series.volumes)
+  }
+
+  /// Whether the account may move series into or out of the Private Collection.
+  public var isAdministrator: Bool {
+    account?.isAdministrator == true
+  }
+
+  /// Moves a series into or out of the Private Collection, as the series page
+  /// on the web does, and files its volumes where Nineveh now lists them.
+  public func setPrivate(_ isPrivate: Bool, for series: SeriesGroup) async {
+    guard let client, let connection, let id = series.serverID,
+      seriesBeingMoved.insert(id).inserted
+    else { return }
+    defer { seriesBeingMoved.remove(id) }
+    do {
+      let detail = try await client.setPrivate(isPrivate, seriesID: id)
+      seriesDetails[id] = detail
+      catalog = catalog.map { publication in
+        guard publication.series?.serverID == id else { return publication }
+        let moved = publication.filed(
+          in: publication.category, library: publication.library, isPrivate: detail.isPrivate)
+        knownPublications[moved.id] = moved
+        return moved
+      }
+      applyVisibility()
+      try? store.replaceCachedPublications(catalog, connectionID: connection.identity)
+      saveCatalogExtras()
+    } catch {
+      if case ReaderError.server(403, _) = error {
+        // No longer an administrator: stop offering what Nineveh refuses.
+        account = account.map { Account(username: $0.username) }
+      }
+      alertMessage = error.localizedDescription
+    }
   }
 
   public func progress(for publication: Publication) -> VolumeProgress {
@@ -503,7 +567,8 @@ public final class ApplicationModel: ObservableObject {
       let directionKey = series.map(directionKey(for:)) ?? key
       var preference = await preferenceStore.direction(for: directionKey)
       if preference == nil { preference = await preferenceStore.direction(for: key) }
-      let mode = await preferenceStore.preferredMode() ?? initial?.mode ?? .single
+      // Each series opens as it was last read on this device, as on the web.
+      let mode = await preferenceStore.mode(for: directionKey) ?? .single
       let volumes = series?.volumes ?? [publication]
       let preferenceStore = self.preferenceStore
       let seriesTitle: String? = series.map { displayTitle(for: $0) }
@@ -514,7 +579,7 @@ public final class ApplicationModel: ObservableObject {
           return await self.save(position: position, key: key, syncRemote: true)
         },
         saveDirection: { await preferenceStore.save(direction: $0, for: directionKey) },
-        saveMode: { await preferenceStore.save(preferredMode: $0) },
+        saveMode: { await preferenceStore.save(mode: $0, for: directionKey) },
         cover: { [weak self] id in await self?.coverData(forPublicationID: id) }
       )
       if volumes.count > 1 {
@@ -554,7 +619,7 @@ public final class ApplicationModel: ObservableObject {
       let key = "local|\(book.id)"
       let initial = try store.progress(key: key)
       let preference = await preferenceStore.direction(for: key) ?? .automatic
-      let mode = await preferenceStore.preferredMode() ?? initial?.mode ?? .single
+      let mode = await preferenceStore.mode(for: key) ?? .single
       let preferenceStore = self.preferenceStore
       presentedReader = ReaderDestination(
         id: key,
@@ -569,7 +634,7 @@ public final class ApplicationModel: ObservableObject {
             await self?.save(position: position, key: key, syncRemote: false) ?? .saved
           },
           saveDirection: { await preferenceStore.save(direction: $0, for: key) },
-          saveMode: { await preferenceStore.save(preferredMode: $0) }
+          saveMode: { await preferenceStore.save(mode: $0, for: key) }
         )
       )
     } catch {
@@ -587,9 +652,7 @@ public final class ApplicationModel: ObservableObject {
       alertMessage = "“\(publication.title)” cannot be marked as read while Nineveh is unavailable."
       return
     }
-    let mode = position(for: publication)?.mode ?? .single
-    let position = ReadingPosition(
-      publicationID: publication.id, page: pageCount, mode: mode, completed: true)
+    let position = ReadingPosition(publicationID: publication.id, page: pageCount, completed: true)
     let result = await save(
       position: position, key: progressKey(publication.id, connection: connection),
       syncRemote: true)
@@ -631,7 +694,8 @@ public final class ApplicationModel: ObservableObject {
     do {
       var volumes = self.series(containing: publication)?.volumes ?? []
       if volumes.isEmpty, let client {
-        volumes = try await client.publications(in: series, library: publication.library)
+        volumes = try await client.publications(
+          in: series, library: publication.library, isPrivate: publication.isPrivate)
       }
       let needed = volumes.filter { !isDownloaded($0) || updateAvailable(for: $0) }
       try await enqueueDownloads(needed)
@@ -726,12 +790,13 @@ public final class ApplicationModel: ObservableObject {
   {
     let credentials = Credentials(username: connection.username, password: password)
     let client = NinevehClient(connection: connection, credentials: credentials)
-    try await client.authenticate()
+    let account = try await client.authenticate()
     if persist {
       try await credentialStore.save(password: password, for: connection)
       try await connectionStore.save(connection)
     }
     activate(connection: connection, client: client)
+    self.account = account
     await loadHiddenLibraries()
     loadOfflineLibrary()
     phase = .ready
@@ -748,7 +813,7 @@ public final class ApplicationModel: ObservableObject {
     activate(connection: connection, client: client)
   }
 
-  private func activate(connection: ServerConnection, client: NinevehClient) {
+  func activate(connection: ServerConnection, client: NinevehClient) {
     self.connection = connection
     self.client = client
     downloadService = DownloadService(
@@ -779,22 +844,27 @@ public final class ApplicationModel: ObservableObject {
   /// Shows what of the catalog is not in a hidden library.
   private func applyVisibility() {
     let hidden = hiddenLibraries
-    publications = catalog.filter { $0.library.map { !hidden.contains($0) } ?? true }
+    let shown = catalog.filter { $0.library.map { !hidden.contains($0) } ?? true }
+    publications = shown.filter { !$0.isPrivate }
+    privatePublications = shown.filter(\.isPrivate)
     libraries = allLibraries.filter { !hidden.contains($0.name) }
+    reindexSeries()
   }
 
   private func reindexSeries() {
     seriesGroups = CatalogOrganizer.series(from: publications)
-    seriesByKey = Dictionary(
-      seriesGroups.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+    privateSeriesGroups = CatalogOrganizer.series(from: privatePublications)
+    let groups = seriesGroups + privateSeriesGroups
+    seriesByKey = Dictionary(groups.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
     seriesKeyByPublication = [:]
-    for group in seriesGroups {
+    for group in groups {
       for volume in group.volumes { seriesKeyByPublication[volume.id] = group.key }
     }
   }
 
+  /// The libraries public series are in, for a server that does not list its libraries.
   private func librariesInCatalog() -> [LibrarySummary] {
-    Set(catalog.compactMap(\.library))
+    Set(catalog.filter { !$0.isPrivate }.compactMap(\.library))
       .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
       .map { LibrarySummary(name: $0) }
   }
@@ -825,7 +895,7 @@ public final class ApplicationModel: ObservableObject {
   private func prefetchSeriesDetails() {
     detailTask?.cancel()
     guard let client else { return }
-    let ids = Array(Set(seriesGroups.compactMap(\.serverID)))
+    let ids = Array(Set((seriesGroups + privateSeriesGroups).compactMap(\.serverID)))
     guard !ids.isEmpty else { return }
     detailTask = Task { [weak self] in
       let fetched = await gather(ids, limit: 6) { id in try? await client.seriesDetail(id: id) }
@@ -844,10 +914,11 @@ public final class ApplicationModel: ObservableObject {
     guard let connection else { return }
     // Positions come one volume at a time; a very large catalog only checks
     // what has been read here, and each series catches up when it is opened.
+    let shown = publications + privatePublications
     let candidates =
-      publications.count <= 400
-      ? publications
-      : publications.filter { positions[progressKey($0.id, connection: connection)] != nil }
+      shown.count <= 400
+      ? shown
+      : shown.filter { positions[progressKey($0.id, connection: connection)] != nil }
     positionTask = Task { [weak self] in await self?.syncPositions(for: candidates) }
   }
 
@@ -1092,6 +1163,11 @@ private enum PreviewCatalog {
       library: "Studio Shelf"),
     book(
       "tin-lantern-2", "Tin Lantern", "Inks", "Noah Vale", "2", .comics, library: "Studio Shelf"),
+    book("quiet-hours-1", "Quiet Hours", "Room 204", "Lena Park", "1", .manga, isPrivate: true),
+    book("quiet-hours-2", "Quiet Hours", "The Late Shift", "Lena Park", "2", .manga, isPrivate: true),
+    book(
+      "red-ledger-1", "Red Ledger", "Old Debts", "Tomas Reyes", "1", .comics,
+      library: "Studio Shelf", isPrivate: true),
   ]
 
   static let seriesDetails: [String: SeriesDetail] = [
@@ -1118,13 +1194,24 @@ private enum PreviewCatalog {
         mediaType: "manga",
         rating: 88.4
       )
-    )
+    ),
+    "quiet-hours": SeriesDetail(
+      id: "quiet-hours",
+      library: "Home Library",
+      category: .manga,
+      localName: "Quiet Hours",
+      title: "Quiet Hours",
+      publicationCount: 2,
+      metadata: nil,
+      isPrivate: true
+    ),
   ]
 
   static let positions: [(String, Int, Bool)] = [
     ("neon-harbor-2", 73, false),
     ("moon-garden-1", 192, true),
     ("ghost-circuit-3", 41, false),
+    ("quiet-hours-1", 55, false),
   ]
 
   private static func book(
@@ -1134,7 +1221,8 @@ private enum PreviewCatalog {
     _ author: String,
     _ volume: String?,
     _ category: PublicationCategory,
-    library: String = "Home Library"
+    library: String = "Home Library",
+    isPrivate: Bool = false
   ) -> Publication {
     let slug = series.lowercased().replacingOccurrences(of: " ", with: "-")
     return Publication(
@@ -1147,7 +1235,8 @@ private enum PreviewCatalog {
       category: category,
       pageCount: 180 + id.count * 3,
       revision: "preview-1",
-      library: library
+      library: library,
+      isPrivate: isPrivate
     )
   }
 }

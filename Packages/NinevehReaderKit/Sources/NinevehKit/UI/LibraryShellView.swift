@@ -4,6 +4,8 @@ import SwiftUI
 enum LibrarySection: Hashable {
   case home
   case browse
+  /// The series Nineveh lists only in its Private Collection.
+  case privateCollection
   case library(String)
   case downloads
   /// "On My Mac", or "On My iPad".
@@ -14,6 +16,7 @@ enum LibrarySection: Hashable {
     switch self {
     case .home: "Home"
     case .browse: "All Series"
+    case .privateCollection: "Private Collection"
     case .library(let name): name
     case .downloads: "Downloads"
     case .onDevice: "On My \(Device.name)"
@@ -25,6 +28,7 @@ enum LibrarySection: Hashable {
     switch self {
     case .home: "house"
     case .browse: "square.grid.2x2"
+    case .privateCollection: "lock"
     case .library: "books.vertical"
     case .downloads: "arrow.down.circle"
     case .onDevice: Device.symbol
@@ -46,7 +50,7 @@ enum LibrarySection: Hashable {
 
   var isSearchable: Bool {
     switch self {
-    case .home, .browse, .library: true
+    case .home, .browse, .privateCollection, .library: true
     case .downloads, .onDevice, .settings: false
     }
   }
@@ -64,10 +68,14 @@ struct LibraryShellView: View {
   #endif
   private let initiallyShowsOrganizedBrowse: Bool
 
-  init(model: ApplicationModel, initiallyShowsOrganizedBrowse: Bool = false) {
+  init(
+    model: ApplicationModel, initiallyShowsOrganizedBrowse: Bool = false,
+    initialSection: LibrarySection? = nil
+  ) {
     self.model = model
     self.initiallyShowsOrganizedBrowse = initiallyShowsOrganizedBrowse
-    _selection = State(initialValue: initiallyShowsOrganizedBrowse ? .browse : .home)
+    _selection = State(
+      initialValue: initialSection ?? (initiallyShowsOrganizedBrowse ? .browse : .home))
   }
 
   var body: some View {
@@ -213,7 +221,9 @@ struct LibraryShellView: View {
   @ViewBuilder
   private var destination: some View {
     if !search.isEmpty, selection.isSearchable {
-      SearchResultsView(model: model, query: search, library: selection.library)
+      SearchResultsView(
+        model: model, query: search, library: selection.library,
+        privateCollection: selection == .privateCollection)
     } else {
       switch selection {
       case .home:
@@ -222,6 +232,8 @@ struct LibraryShellView: View {
         BrowseView(
           model: model, library: nil,
           initialArrangement: initiallyShowsOrganizedBrowse ? .authors : .series)
+      case .privateCollection:
+        BrowseView(model: model, library: nil, privateCollection: true)
       case .library(let name):
         BrowseView(model: model, library: name).id(name)
       case .downloads:
@@ -448,6 +460,9 @@ private struct LibrarySidebar: View {
         VStack(alignment: .leading, spacing: 2) {
           row(.home)
           row(.browse, badge: model.seriesGroups.count)
+          if !model.privateSeriesGroups.isEmpty {
+            row(.privateCollection, badge: model.privateSeriesGroups.count)
+          }
           if !model.libraries.isEmpty {
             heading("Libraries")
             ForEach(model.libraries) { library in
@@ -503,6 +518,7 @@ private struct SidebarRow: View {
         Text(section.title)
           .font(.system(size: 14, weight: isSelected ? .bold : .medium))
           .lineLimit(1)
+          .minimumScaleFactor(0.85)
         Spacer(minLength: 4)
         if badge > 0 {
           Text(badge, format: .number)

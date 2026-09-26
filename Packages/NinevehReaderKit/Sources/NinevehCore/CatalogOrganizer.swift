@@ -135,6 +135,8 @@ public struct SeriesGroup: Hashable, Identifiable, Sendable {
 
   public var id: SeriesKey { key }
   public var library: String? { key.library }
+  /// A series is private or not as a whole, so its first volume speaks for it.
+  public var isPrivate: Bool { volumes.first?.isPrivate ?? false }
 
   public func volume(after publication: Publication) -> Publication? {
     guard let index = volumes.firstIndex(where: { $0.id == publication.id }),

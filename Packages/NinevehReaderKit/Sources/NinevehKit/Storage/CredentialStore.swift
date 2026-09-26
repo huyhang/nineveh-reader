@@ -89,16 +89,19 @@ public actor UserDefaultsConnectionStore: ConnectionStoring {
 public actor UserDefaultsReadingPreferenceStore: ReadingPreferenceStoring {
   private let defaults: UserDefaults
   private let key: String
-  private let modeKey: String
+  private let modesKey: String
+  private let legacyModeKey: String
 
   public init(
     defaults: UserDefaults = .standard,
     key: String = "readingDirections",
-    modeKey: String = "readingMode"
+    modesKey: String = "readingModes",
+    legacyModeKey: String = "readingMode"
   ) {
     self.defaults = defaults
     self.key = key
-    self.modeKey = modeKey
+    self.modesKey = modesKey
+    self.legacyModeKey = legacyModeKey
   }
 
   public func direction(for identifier: String) -> ReadingDirectionPreference? {
@@ -116,12 +119,17 @@ public actor UserDefaultsReadingPreferenceStore: ReadingPreferenceStoring {
     defaults.set(values, forKey: key)
   }
 
-  public func preferredMode() -> ReadingMode? {
-    defaults.string(forKey: modeKey).flatMap(ReadingMode.init(rawValue:))
+  /// A series never given a mode of its own opens in the one earlier versions
+  /// kept for every series, which choosing a mode no longer changes.
+  public func mode(for identifier: String) -> ReadingMode? {
+    let chosen = defaults.dictionary(forKey: modesKey)?[identifier] as? String
+    return (chosen ?? defaults.string(forKey: legacyModeKey)).flatMap(ReadingMode.init(rawValue:))
   }
 
-  public func save(preferredMode: ReadingMode) {
-    defaults.set(preferredMode.rawValue, forKey: modeKey)
+  public func save(mode: ReadingMode, for identifier: String) {
+    var values = defaults.dictionary(forKey: modesKey) as? [String: String] ?? [:]
+    values[identifier] = mode.rawValue
+    defaults.set(values, forKey: modesKey)
   }
 }
 

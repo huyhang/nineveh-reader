@@ -16,24 +16,60 @@
           idle: arguments.dropFirst(4).contains("--idle"))
         return
       }
-      guard (2...4).contains(arguments.count) else {
+      guard arguments.count >= 2, !arguments[1].hasPrefix("--") else {
         throw ScreenshotError.expectedOutputPath
       }
 
       let outputURL = URL(fileURLWithPath: arguments[1])
-      let showsOrganizedBrowse = arguments.dropFirst(2).contains("--browse")
+      let flags = arguments.dropFirst(2)
+      let showsOrganizedBrowse = flags.contains("--browse")
+      let showsPrivateCollection = flags.contains("--private")
       // Tall enough for every shelf on Home.
-      let tall = arguments.dropFirst(2).contains("--tall")
+      let tall = flags.contains("--tall")
+      // `--layout=dense` or `--layout=list` lays series grids out that way.
+      let layout = flags.first { $0.hasPrefix("--layout=") }.map { String($0.dropFirst(9)) }
+      // `--series=Title` opens that series' page, public or private.
+      let seriesTitle = flags.first { $0.hasPrefix("--series=") }.map { String($0.dropFirst(9)) }
+      // `--volume=Title` opens that volume's page from its series' page.
+      let volumeTitle = flags.first { $0.hasPrefix("--volume=") }.map { String($0.dropFirst(9)) }
+      // `--width=740` captures a window that narrow, as a person might squeeze it.
+      let width = flags.first { $0.hasPrefix("--width=") }.flatMap { Double($0.dropFirst(8)) }
       try FileManager.default.createDirectory(
         at: outputURL.deletingLastPathComponent(),
         withIntermediateDirectories: true
       )
 
-      let size = NSSize(width: 1_440, height: tall ? 1_900 : 900)
+      // Choices made in a capture stay out of the app's own defaults.
+      let suite = "NinevehScreenshot.\(ProcessInfo.processInfo.processIdentifier)"
+      guard let defaults = UserDefaults(suiteName: suite) else {
+        throw ScreenshotError.renderFailed
+      }
+      defer { defaults.removePersistentDomain(forName: suite) }
+      if let layout { defaults.set(layout, forKey: "seriesLayout") }
+
+      let model = ApplicationModel.preview()
+      if let seriesTitle {
+        guard
+          let series = (model.seriesGroups + model.privateSeriesGroups).first(where: {
+            $0.title == seriesTitle
+          })
+        else { throw ScreenshotError.unknownSeries(seriesTitle) }
+        model.libraryPath = [.series(series.key)]
+        if let volumeTitle {
+          guard let volume = series.volumes.first(where: { $0.title == volumeTitle }) else {
+            throw ScreenshotError.unknownSeries(volumeTitle)
+          }
+          model.libraryPath.append(.publication(volume))
+        }
+      }
+
+      let size = NSSize(width: width ?? 1_440, height: tall ? 1_900 : 900)
       let content = NinevehReaderRootView(
-        model: .preview(),
-        initiallyShowsOrganizedBrowse: showsOrganizedBrowse
+        model: model,
+        initiallyShowsOrganizedBrowse: showsOrganizedBrowse,
+        initiallyShowsPrivateCollection: showsPrivateCollection
       )
+      .defaultAppStorage(defaults)
       .frame(width: size.width, height: size.height)
       .preferredColorScheme(.dark)
       let hostingView = NSHostingView(rootView: content)
@@ -130,8 +166,7 @@
         title: archive.deletingPathExtension().lastPathComponent,
         subtitle: series,
         source: CBZArchiveSource(url: archive),
-        initialPosition: ReadingPosition(
-          publicationID: "capture", page: 6, mode: .double, completed: false),
+        initialPosition: ReadingPosition(publicationID: "capture", page: 6, completed: false),
         initialMode: .double,
         defaultDirection: .rightToLeft,
         context: ReaderContext(
@@ -172,11 +207,13 @@
   private enum ScreenshotError: LocalizedError {
     case expectedOutputPath
     case renderFailed
+    case unknownSeries(String)
 
     var errorDescription: String? {
       switch self {
       case .expectedOutputPath: "Pass one screenshot output path."
       case .renderFailed: "SwiftUI could not render the screenshot."
+      case .unknownSeries(let title): "The preview library has no series titled “\(title)”."
       }
     }
   }

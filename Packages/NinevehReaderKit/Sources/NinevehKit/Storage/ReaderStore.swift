@@ -102,6 +102,8 @@ final class ProgressEntity {
   @Attribute(.unique) var key: String
   var publicationID: String
   var page: Int
+  /// Left from when the account kept a reading mode. The schema still has the
+  /// column, but nothing reads it: modes are kept per series on the device.
   var modeRawValue: String
   var completed: Bool
   var updatedAt: Date
@@ -111,7 +113,7 @@ final class ProgressEntity {
     self.key = key
     self.publicationID = position.publicationID
     self.page = position.page
-    self.modeRawValue = position.mode.rawValue
+    self.modeRawValue = ReadingMode.single.rawValue
     self.completed = position.completed
     self.updatedAt = position.updatedAt
     self.pendingSync = pendingSync
@@ -121,7 +123,6 @@ final class ProgressEntity {
     ReadingPosition(
       publicationID: publicationID,
       page: page,
-      mode: ReadingMode(rawValue: modeRawValue) ?? .single,
       completed: completed,
       updatedAt: updatedAt
     )
@@ -463,7 +464,6 @@ public final class ReaderStore {
       )
     if entity.modelContext == nil { context.insert(entity) }
     entity.page = position.page
-    entity.modeRawValue = position.mode.rawValue
     entity.completed = position.completed
     entity.updatedAt = position.updatedAt
     entity.pendingSync = pendingSync

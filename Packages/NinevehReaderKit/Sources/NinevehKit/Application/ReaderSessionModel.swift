@@ -245,7 +245,7 @@ public final class ReaderSessionModel: ObservableObject {
     let generation = saveGeneration
     hasUnsavedChanges = false
     let position = ReadingPosition(
-      publicationID: destination.publicationID, page: page, mode: mode, completed: completed)
+      publicationID: destination.publicationID, page: page, completed: completed)
     let result = await destination.actions.savePosition(position)
     // A newer save owns the status now.
     guard generation == saveGeneration, !hasUnsavedChanges else { return }

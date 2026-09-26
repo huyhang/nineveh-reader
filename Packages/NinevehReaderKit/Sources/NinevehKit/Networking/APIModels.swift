@@ -1,7 +1,27 @@
 import Foundation
 import NinevehCore
 
-/// `GET /api/v1/series/{id}`.
+/// `GET /api/v1/auth/me`.
+struct UserAccountDTO: Decodable {
+  let username: String
+  let isAdmin: Bool
+
+  enum CodingKeys: String, CodingKey {
+    case username, isAdmin
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    username = try container.decode(String.self, forKey: .username)
+    isAdmin = try container.decodeIfPresent(Bool.self, forKey: .isAdmin) ?? false
+  }
+
+  var model: Account {
+    Account(username: username, isAdministrator: isAdmin)
+  }
+}
+
+/// `GET /api/v1/series/{id}`, and what `PUT /api/v1/series/{id}/privacy` answers.
 struct SeriesDetailDTO: Decodable {
   let id: String
   let library: String
@@ -10,9 +30,10 @@ struct SeriesDetailDTO: Decodable {
   let title: String
   let publicationCount: Int
   let metadata: SeriesMetadataDTO?
+  let isPrivate: Bool
 
   enum CodingKeys: String, CodingKey {
-    case id, library, category, localName, title, publicationCount, metadata
+    case id, library, category, localName, title, publicationCount, metadata, isPrivate
   }
 
   init(from decoder: Decoder) throws {
@@ -26,6 +47,8 @@ struct SeriesDetailDTO: Decodable {
     // Metadata is a nicety: a shape this client does not understand must not
     // cost the reader the series page itself.
     metadata = try? container.decodeIfPresent(SeriesMetadataDTO.self, forKey: .metadata)
+    // Servers from before the Private Collection have only public series.
+    isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
   }
 
   var model: SeriesDetail {
@@ -36,7 +59,8 @@ struct SeriesDetailDTO: Decodable {
       localName: localName,
       title: title,
       publicationCount: publicationCount,
-      metadata: metadata?.model
+      metadata: metadata?.model,
+      isPrivate: isPrivate
     )
   }
 }

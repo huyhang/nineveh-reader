@@ -13,6 +13,9 @@ public struct ReaderView: View {
   @State private var chromeVisible = true
   @State private var chromeHideTask: Task<Void, Never>?
   @State private var isHoveringChrome = false
+  /// The reader clicked the page to read it without the controls. They stay
+  /// hidden however the pointer moves, until another click brings them back.
+  @State private var inFocusMode = false
   @State private var sliderDraft: Double?
   @State private var zoom: CGFloat = 1
   @State private var zoomAtGestureStart: CGFloat?
@@ -73,7 +76,7 @@ public struct ReaderView: View {
     .focused($focused)
     .onKeyPress(phases: .down, action: handle)
     .onContinuousHover { phase in
-      if case .active = phase { revealChrome() }
+      if case .active = phase, !inFocusMode { revealChrome() }
     }
     .onAppear {
       focused = true
@@ -742,7 +745,9 @@ public struct ReaderView: View {
   private func toggleChrome() {
     if chromeVisible {
       hideChrome()
+      inFocusMode = true
     } else {
+      inFocusMode = false
       revealChrome()
     }
   }

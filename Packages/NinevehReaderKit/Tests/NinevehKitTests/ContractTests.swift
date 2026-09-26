@@ -23,9 +23,14 @@ import Testing
       #"{"metadata": {"title": "Nineveh"}, "links": [], "navigation": []}"#.utf8)
   ])
   _ = try await makeContractClient(byCategory).catalog()
+  // A server with private series lists its Private Collection beside the libraries.
+  let withPrivateCollection = FixtureTransport(overrides: PrivateCollection.overrides)
+  _ = try await makeContractClient(withPrivateCollection).catalog()
 
   var called = Set<String>()
-  for request in await transport.requests + byCategory.requests {
+  let requests =
+    await transport.requests + byCategory.requests + withPrivateCollection.requests
+  for request in requests {
     let url = try #require(request.url)
     let method = request.httpMethod ?? "GET"
     let operation = try #require(
@@ -49,10 +54,12 @@ import Testing
       "GET /opds/v2/authentication.json",
       "GET /api/v1/auth/me",
       "GET /opds/v2/catalog.json",
+      "GET /opds/v2/private.json",
       "GET /opds/v2/navigation.json",
       "GET /opds/v2/publications.json",
       "GET /api/v1/series/{series_id}",
       "GET /api/v1/series/{series_id}/cover",
+      "PUT /api/v1/series/{series_id}/privacy",
       "GET /api/v1/publications/{publication_id}/pages",
       "GET /api/v1/publications/{publication_id}/pages/{number}",
       "GET /api/v1/publications/{publication_id}/cover",
@@ -77,7 +84,7 @@ import Testing
   let contract = try Contract()
   let transport = FixtureTransport()
   try await makeContractClient(transport).save(
-    ReadingPosition(publicationID: "volume-1", page: 12, mode: .double, completed: true))
+    ReadingPosition(publicationID: "volume-1", page: 12, completed: true))
 
   let body = try #require(await transport.requests.first?.httpBody)
   let sent = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -85,10 +92,26 @@ import Testing
   let schema = contract.concrete(operation.requestSchema)
   #expect(Set(sent.keys).isSubset(of: schema["properties"].object.keys))
   #expect(Set(schema["required"].array.compactMap(\.string)).isSubset(of: sent.keys))
-  // Every mode the reader offers can be saved, and every saved one read back.
-  #expect(
-    Set(ReadingMode.allCases.map(\.rawValue))
-      == Set(contract.listed(schema["properties"]["mode"]) ?? []))
+  // The account's mode is deprecated, kept for older apps; leaving it out
+  // leaves theirs as it was, while this one keeps a mode per series.
+  #expect(schema["properties"]["mode"]["deprecated"].bool == true)
+  #expect(sent["mode"] == nil)
+}
+
+@Test func movesASeriesInTheShapeTheContractTakes() async throws {
+  let contract = try Contract()
+  let transport = FixtureTransport()
+  _ = try await makeContractClient(transport).setPrivate(true, seriesID: "series-1")
+
+  let request = try #require(await transport.requests.first)
+  let body = try #require(request.httpBody)
+  let sent = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+  let operation = try #require(contract.operation("PUT", "/api/v1/series/s/privacy"))
+  let schema = contract.concrete(operation.requestSchema)
+  #expect(Set(sent.keys) == Set(schema["required"].array.compactMap(\.string)))
+  #expect(Set(sent.keys).isSubset(of: schema["properties"].object.keys))
+  #expect(sent["private"] as? Bool == true)
+  #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
 }
 
 // MARK: - What the client reads
@@ -106,13 +129,42 @@ private let fieldsRead: [String: [String: String]] = {
   let position = [
     "publicationId": "string",
     "page": "integer",
-    "mode": "string",
     "completed": "boolean",
     "updatedAt": "string",
   ]
+  let series = [
+    "id": "string",
+    "library": "string",
+    "category": "string",
+    "localName": "string",
+    "title": "string",
+    "publicationCount": "integer",
+    "isPrivate": "boolean",
+    "metadata.provider": "string",
+    "metadata.sourceUrl": "string",
+    "metadata.editedFields": "array",
+    "metadata.license": "string",
+    "metadata.values.title": "string",
+    "metadata.values.alternative_titles": "array",
+    "metadata.values.authors": "array",
+    "metadata.values.artists": "array",
+    "metadata.values.publishers": "array",
+    "metadata.values.tags": "array",
+    "metadata.values.description": "string",
+    "metadata.values.published_start": "string",
+    "metadata.values.published_end": "string",
+    "metadata.values.status": "string",
+    "metadata.values.content_rating": "string",
+    "metadata.values.media_type": "string",
+    "metadata.values.rating": "number",
+    "metadata.values.final_volume": "number",
+    "metadata.values.total_chapters": "number",
+  ]
   return [
     "GET /opds/v2/authentication.json": ["authentication[].type": "string"],
+    "GET /api/v1/auth/me": ["username": "string", "isAdmin": "boolean"],
     "GET /opds/v2/catalog.json": navigation,
+    "GET /opds/v2/private.json": navigation,
     "GET /opds/v2/navigation.json": navigation,
     "GET /opds/v2/publications.json": [
       "links[].href": "string",
@@ -131,33 +183,8 @@ private let fieldsRead: [String: [String: String]] = {
       "publications[].links[].properties.length": "integer",
       "publications[].images[].href": "string",
     ],
-    "GET /api/v1/series/{series_id}": [
-      "id": "string",
-      "library": "string",
-      "category": "string",
-      "localName": "string",
-      "title": "string",
-      "publicationCount": "integer",
-      "metadata.provider": "string",
-      "metadata.sourceUrl": "string",
-      "metadata.editedFields": "array",
-      "metadata.license": "string",
-      "metadata.values.title": "string",
-      "metadata.values.alternative_titles": "array",
-      "metadata.values.authors": "array",
-      "metadata.values.artists": "array",
-      "metadata.values.publishers": "array",
-      "metadata.values.tags": "array",
-      "metadata.values.description": "string",
-      "metadata.values.published_start": "string",
-      "metadata.values.published_end": "string",
-      "metadata.values.status": "string",
-      "metadata.values.content_rating": "string",
-      "metadata.values.media_type": "string",
-      "metadata.values.rating": "number",
-      "metadata.values.final_volume": "number",
-      "metadata.values.total_chapters": "number",
-    ],
+    "GET /api/v1/series/{series_id}": series,
+    "PUT /api/v1/series/{series_id}/privacy": series,
     "GET /api/v1/publications/{publication_id}/pages": [
       "publicationId": "string",
       "revision": "string",
@@ -190,7 +217,11 @@ private let fieldsRead: [String: [String: String]] = {
 }
 
 @Test func acceptsTheCapturedAuthenticationDocument() async throws {
-  try await makeContractClient(FixtureTransport()).authenticate()
+  let account = try await makeContractClient(FixtureTransport()).authenticate()
+
+  let raw = try Captured.json("me.json")
+  #expect(account.username == raw["username"].string)
+  #expect(account.isAdministrator == raw["isAdmin"].bool)
 }
 
 @Test func filesTheCapturedCatalog() async throws {
@@ -199,8 +230,11 @@ private let fieldsRead: [String: [String: String]] = {
   let shelves = try Captured.json("navigation.json")
   let feed = try Captured.json("publications.json")
 
-  // The links name each library form-encoded, as `Sample+Library`.
-  let libraries = root["navigation"].array
+  // The links name each library form-encoded, as `Sample+Library`. The
+  // Private Collection listed beside them, when there is one, is not a library.
+  let libraries = root["navigation"].array.filter {
+    $0["href"].string?.hasSuffix("/opds/v2/private.json") != true
+  }
   #expect(catalog.libraries.map(\.name) == libraries.map { $0["title"].string })
   #expect(
     catalog.libraries.map(\.publicationCount)
@@ -246,6 +280,40 @@ func readsTheCapturedSeries() async throws {
   #expect(detail.title == raw["title"].string)
   #expect(detail.publicationCount == raw["publicationCount"].int)
   #expect((detail.metadata == nil) == raw["metadata"].isNull)
+  // Captured before the Private Collection, a series without the field is public.
+  #expect(detail.isPrivate == (raw["isPrivate"].bool ?? false))
+}
+
+@Test func filesThePrivateCollectionApartFromTheLibraries() async throws {
+  let transport = FixtureTransport(overrides: PrivateCollection.overrides)
+
+  let catalog = try await makeContractClient(transport).catalog()
+
+  // Listed beside the libraries, the collection is not taken for one.
+  #expect(catalog.libraries.map(\.name) == ["Sample Library"])
+  let feeds = await transport.requests.compactMap(\.url).filter {
+    $0.path == "/opds/v2/navigation.json" || $0.path == "/opds/v2/publications.json"
+  }
+  let privateFeeds = feeds.filter { $0.query?.contains("collection=private") == true }
+  // One library's shelf, then the same library's shelf in the collection.
+  #expect(feeds.count == 4)
+  #expect(privateFeeds.map(\.path) == ["/opds/v2/navigation.json", "/opds/v2/publications.json"])
+  // Each shelf answers with the one captured page, so its volumes stay where
+  // the public shelf first filed them.
+  #expect(catalog.publications.allSatisfy { !$0.isPrivate })
+}
+
+@Test func filesAServerWhoseSeriesAreAllPrivate() async throws {
+  var overrides = PrivateCollection.overrides
+  overrides["/opds/v2/catalog.json"] = PrivateCollection.catalog(libraries: false)
+  let transport = FixtureTransport(overrides: overrides)
+
+  let catalog = try await makeContractClient(transport).catalog()
+
+  #expect(catalog.libraries.isEmpty)
+  let captured = try Captured.json("publications.json")["publications"].array
+  #expect(catalog.publications.count == captured.count)
+  #expect(catalog.publications.allSatisfy { $0.isPrivate && $0.library == "Sample Library" })
 }
 
 @Test func readsTheCapturedManifest() async throws {
@@ -276,7 +344,6 @@ func readsTheCapturedProgress() async throws {
 
   #expect(position.publicationID == id)
   #expect(position.page == raw["page"].int)
-  #expect(position.mode.rawValue == raw["mode"].string)
   #expect(position.completed == raw["completed"].bool)
   // The decoder falls back to now on a date it cannot read, so compare.
   let text = try #require(raw["updatedAt"].string)
@@ -331,8 +398,10 @@ private func exerciseEveryRequest(_ client: NinevehClient) async throws {
   let series = try #require(publication.series)
   let seriesID = try #require(series.serverID)
   _ = try await client.publications(in: series, library: publication.library)
+  _ = try await client.publications(in: series, library: publication.library, isPrivate: true)
   _ = try await client.seriesDetail(id: seriesID)
   _ = try await client.seriesCover(id: seriesID)
+  _ = try await client.setPrivate(true, seriesID: seriesID)
   let manifest = try await client.manifest(for: publication.id)
   for width in [nil, 900] {
     _ = try await client.page(
@@ -344,9 +413,45 @@ private func exerciseEveryRequest(_ client: NinevehClient) async throws {
   _ = try await client.cover(for: Publication(id: publication.id, title: publication.title))
   _ = try await client.download(publication: publication)
   _ = try await client.position(for: publication.id)
-  try await client.save(
-    ReadingPosition(publicationID: publication.id, page: 2, mode: .double, completed: false))
+  try await client.save(ReadingPosition(publicationID: publication.id, page: 2, completed: false))
   try await client.clearPosition(for: publication.id)
+}
+
+/// A root and a Private Collection feed as Nineveh sends them for an account
+/// that can see private series, beside the captured library's shelves. No
+/// fixture was captured from a server with one.
+private enum PrivateCollection {
+  static let base = "http://127.0.0.1:8081"
+
+  static let overrides = [
+    "/opds/v2/catalog.json": catalog(libraries: true),
+    "/opds/v2/private.json": Data(
+      #"""
+      {"metadata": {"title": "Nineveh — Private Collection"}, "links": [],
+       "navigation": [
+         {"title": "Sample Library", "type": "application/opds+json",
+          "href": "\#(base)/opds/v2/navigation.json?collection=private&library=Sample+Library",
+          "properties": {"numberOfItems": 2}}
+       ]}
+      """#.utf8),
+  ]
+
+  static func catalog(libraries: Bool) -> Data {
+    let library = #"""
+      {"title": "Sample Library", "type": "application/opds+json",
+       "href": "\#(base)/opds/v2/navigation.json?library=Sample+Library",
+       "properties": {"numberOfItems": 2}},
+      """#
+    return Data(
+      #"""
+      {"metadata": {"title": "Nineveh"}, "links": [],
+       "navigation": [
+         \#(libraries ? library : "")
+         {"title": "Private Collection", "type": "application/opds+json",
+          "href": "\#(base)/opds/v2/private.json", "properties": {"numberOfItems": 2}}
+       ]}
+      """#.utf8)
+  }
 }
 
 private func makeContractClient(_ transport: FixtureTransport) -> NinevehClient {
@@ -502,9 +607,12 @@ private actor FixtureTransport: HTTPTransport {
     "/opds/v2/authentication.json": "authentication.json",
     "/api/v1/auth/me": "me.json",
     "/opds/v2/catalog.json": "catalog.json",
+    "/opds/v2/private.json": "private.json",
     "/opds/v2/navigation.json": "navigation.json",
     "/opds/v2/publications.json": "publications.json",
     "/api/v1/series/{series_id}": "series.json",
+    // Nineveh answers a series' move with the series as it now stands.
+    "/api/v1/series/{series_id}/privacy": "series.json",
     "/api/v1/publications/{publication_id}/pages": "pages.json",
     "/api/v1/publications/{publication_id}/progress": "progress.json",
   ]

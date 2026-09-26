@@ -4,10 +4,15 @@ import SwiftUI
 public struct NinevehReaderRootView: View {
   @ObservedObject private var model: ApplicationModel
   private let initiallyShowsOrganizedBrowse: Bool
+  private let initiallyShowsPrivateCollection: Bool
 
-  public init(model: ApplicationModel, initiallyShowsOrganizedBrowse: Bool = false) {
+  public init(
+    model: ApplicationModel, initiallyShowsOrganizedBrowse: Bool = false,
+    initiallyShowsPrivateCollection: Bool = false
+  ) {
     self.model = model
     self.initiallyShowsOrganizedBrowse = initiallyShowsOrganizedBrowse
+    self.initiallyShowsPrivateCollection = initiallyShowsPrivateCollection
   }
 
   public var body: some View {
@@ -24,7 +29,8 @@ public struct NinevehReaderRootView: View {
         case .ready:
           LibraryShellView(
             model: model,
-            initiallyShowsOrganizedBrowse: initiallyShowsOrganizedBrowse
+            initiallyShowsOrganizedBrowse: initiallyShowsOrganizedBrowse,
+            initialSection: initiallyShowsPrivateCollection ? .privateCollection : nil
           )
         }
       }
